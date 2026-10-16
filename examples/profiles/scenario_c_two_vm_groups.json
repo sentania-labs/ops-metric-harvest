@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "name": "Scenario C: Distinct VM Groups with Overlap",
+  "connection": {
+    "server": "vcf-ops.example.com",
+    "verify_ssl": true
+  },
+  "time_range": {
+    "mode": "relative",
+    "relative_preset": "12h",
+    "interval_minutes": 5,
+    "interval_type": "MINUTES",
+    "rollup_type": "AVG"
+  },
+  "groups": [
+    {
+      "group_id": "group-app-vms",
+      "name": "Application VMs (Group 1)",
+      "resource_kind": "VirtualMachine",
+      "selector": {
+        "resource_kind": "VirtualMachine",
+        "selection_mode": "explicit",
+        "adapter_kind": "VMWARE",
+        "resource_ids": [
+          "vm-uuid-001",
+          "vm-uuid-002",
+          "vm-uuid-003"
+        ]
+      },
+      "metric_set": {
+        "stat_keys": [
+          "cpu|usage_average",
+          "mem|usage_average",
+          "cpu|readyPct"
+        ]
+      }
+    },
+    {
+      "group_id": "group-storage-vms",
+      "name": "Storage and IO VMs (Group 2)",
+      "resource_kind": "VirtualMachine",
+      "selector": {
+        "resource_kind": "VirtualMachine",
+        "selection_mode": "explicit",
+        "adapter_kind": "VMWARE",
+        "resource_ids": [
+          "vm-uuid-003",
+          "vm-uuid-004",
+          "vm-uuid-005"
+        ]
+      },
+      "metric_set": {
+        "stat_keys": [
+          "net:aggregate of all instances|usage_average",
+          "disk:aggregate of all instances|totalLatency_average",
+          "mem|consumed_average"
+        ]
+      }
+    }
+  ],
+  "export_config": {
+    "formats": ["csv", "xlsx", "json"],
+    "timezone": "America/Chicago"
+  }
+}

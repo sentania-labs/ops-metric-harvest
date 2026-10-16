@@ -1,0 +1,407 @@
+"""Shared collection engine for VCF Operations Metrics Explorer."""
+
+from __future__ import annotations
+
+import csv
+import logging
+import os
+import time
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from ops_metric_harvest.client import OpsClient
+from ops_metric_harvest.models import (
+    CollectionGroup,
+    CollectionJob,
+    CollectionResult,
+    MetricSample,
+    iso_utc_from_ms,
+)
+
+logger = logging.getLogger("ops_metric_harvest.engine")
+
+
+class EngineError(Exception):
+    """Exception raised by collection engine."""
+
+
+class CollectionEngine:
+    """Coordinates inventory discovery, metric resolution, batched collection, and alignment."""
+
+    def __init__(
+        self,
+        client: OpsClient,
+        max_workers: int = 4,
+        progress_cb: Optional[Callable[[str, int, int], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ):
+        self.client = client
+        self.max_workers = max(1, max_workers)
+        self.progress_cb = progress_cb or (lambda msg, done, total: None)
+        self.should_stop = should_stop or (lambda: False)
+
+    def _log(self, msg: str, done: int = 0, total: int = 0) -> None:
+        self.progress_cb(msg, done, total)
+
+    def resolve_group_objects(
+        self,
+        group: CollectionGroup,
+        all_inventory_cache: Dict[str, List[Dict[str, Any]]],
+    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+        """Resolve target objects for a collection group.
+
+        Returns:
+            Tuple of (resolved_objects, warnings, errors)
+        """
+        kind = group.resource_kind
+        selector = group.selector
+        mode = selector.selection_mode
+        warnings: List[str] = []
+        errors: List[Dict[str, Any]] = []
+
+        # Populate cache for kind if needed
+        if kind not in all_inventory_cache:
+            self._log(f"Discovering inventory for resource kind '{kind}'...")
+            try:
+                all_inventory_cache[kind] = self.client.search_resources(kind)
+            except Exception as e:
+                msg = f"Failed to list inventory for {kind}: {e}"
+                errors.append({"group": group.name, "resource_kind": kind, "error": msg})
+                return [], warnings, errors
+
+        inventory = all_inventory_cache[kind]
+        name_to_resources: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        id_to_resource: Dict[str, Dict[str, Any]] = {}
+        for res in inventory:
+            name_to_resources[res["name"].lower()].append(res)
+            id_to_resource[res["resourceId"]] = res
+
+        resolved: List[Dict[str, Any]] = []
+
+        if mode == "all":
+            resolved = list(inventory)
+
+        elif mode == "search":
+            query = (selector.search_query or "").strip().lower()
+            if not query:
+                resolved = list(inventory)
+            else:
+                resolved = [r for r in inventory if query in r["name"].lower()]
+
+        elif mode == "explicit":
+            # Match by resource IDs first
+            for rid in selector.resource_ids:
+                if rid in id_to_resource:
+                    resolved.append(id_to_resource[rid])
+                else:
+                    msg = f"Resource ID '{rid}' not found in {kind} inventory"
+                    warnings.append(msg)
+                    errors.append({"group": group.name, "resourceId": rid, "error": msg})
+
+            # Match by object names
+            for name in selector.names:
+                clean_name = name.strip()
+                matches = name_to_resources.get(clean_name.lower(), [])
+                if len(matches) == 1:
+                    if matches[0] not in resolved:
+                        resolved.append(matches[0])
+                elif len(matches) > 1:
+                    msg = f"Ambiguous name match: multiple objects named '{clean_name}' exist for kind '{kind}'"
+                    warnings.append(msg)
+                    errors.append({"group": group.name, "name": clean_name, "error": msg})
+                else:
+                    msg = f"Resource named '{clean_name}' not found in {kind} inventory"
+                    warnings.append(msg)
+                    errors.append({"group": group.name, "name": clean_name, "error": msg})
+
+        elif mode == "imported":
+            # Import from CSV content or file
+            csv_lines: List[str] = []
+            if selector.csv_content:
+                csv_lines = selector.csv_content.strip().splitlines()
+            elif selector.csv_path and os.path.exists(selector.csv_path):
+                with open(selector.csv_path, "r", encoding="utf-8-sig") as f:
+                    csv_lines = f.read().strip().splitlines()
+            else:
+                msg = f"Imported selection requested but no CSV content or file provided for group '{group.name}'"
+                warnings.append(msg)
+                errors.append({"group": group.name, "error": msg})
+                return [], warnings, errors
+
+            # Parse CSV robustly
+            reader = csv.reader(csv_lines)
+            raw_rows = [row for row in reader if row and any(cell.strip() for cell in row)]
+            if not raw_rows:
+                warnings.append(f"Imported CSV for group '{group.name}' is empty")
+                return [], warnings, errors
+
+            # Determine headers
+            header = [c.strip().lower() for c in raw_rows[0]]
+            data_start = 0
+            name_idx = 0
+            kind_idx = -1
+
+            if "objectname" in header or "name" in header:
+                data_start = 1
+                name_idx = header.index("objectname") if "objectname" in header else header.index("name")
+                if "resourcekind" in header:
+                    kind_idx = header.index("resourcekind")
+            elif len(raw_rows[0]) >= 2 and raw_rows[0][0].strip().lower() in ("objectname", "name"):
+                data_start = 1
+
+            for row in raw_rows[data_start:]:
+                if not row or len(row) <= name_idx:
+                    continue
+                req_name = row[name_idx].strip()
+                if not req_name:
+                    continue
+
+                req_kind = row[kind_idx].strip() if kind_idx >= 0 and len(row) > kind_idx else kind
+                if req_kind.lower() != kind.lower():
+                    continue
+
+                matches = name_to_resources.get(req_name.lower(), [])
+                if len(matches) == 1:
+                    if matches[0] not in resolved:
+                        resolved.append(matches[0])
+                elif len(matches) > 1:
+                    msg = f"Ambiguous name match in CSV import: multiple objects named '{req_name}'"
+                    warnings.append(msg)
+                    errors.append({"group": group.name, "name": req_name, "error": msg})
+                else:
+                    msg = f"Imported resource '{req_name}' not found in {kind} inventory"
+                    warnings.append(msg)
+                    errors.append({"group": group.name, "name": req_name, "error": msg})
+
+        # Deduplicate resolved objects preserving order
+        unique_resolved: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        for r in resolved:
+            rid = r["resourceId"]
+            if rid not in seen_ids:
+                seen_ids.add(rid)
+                unique_resolved.append(r)
+
+        return unique_resolved, warnings, errors
+
+    def execute(self, job: CollectionJob) -> CollectionResult:
+        """Execute a complete collection job across all groups."""
+        start_time_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        start_mono = time.monotonic()
+        all_warnings: List[str] = []
+        all_errors: List[Dict[str, Any]] = []
+        all_inventory_cache: Dict[str, List[Dict[str, Any]]] = {}
+        metric_catalogues: Dict[str, Dict[str, Dict[str, str]]] = {}
+
+        if not job.groups:
+            raise EngineError("Job contains no collection groups")
+
+        self._log(f"Starting collection job '{job.name}' with {len(job.groups)} group(s)...")
+
+        # Step 1: Resolve objects for each group
+        group_objects: Dict[str, List[Dict[str, Any]]] = {}
+        all_resolved_resources: Dict[str, Dict[str, Any]] = {}
+
+        for group in job.groups:
+            if self.should_stop():
+                raise EngineError("Collection cancelled by user")
+
+            objs, warns, errs = self.resolve_group_objects(group, all_inventory_cache)
+            group_objects[group.group_id] = objs
+            all_warnings.extend(warns)
+            all_errors.extend(errs)
+
+            for o in objs:
+                all_resolved_resources[o["resourceId"]] = o
+
+            self._log(f"Group '{group.name}' resolved {len(objs)} {group.resource_kind} object(s).")
+
+        # Step 2: Resolve metric catalogues
+        for group in job.groups:
+            kind = group.resource_kind
+            adapter = group.selector.adapter_kind or "VMWARE"
+            cat_key = f"{adapter}:{kind}"
+            if cat_key not in metric_catalogues:
+                try:
+                    cat = self.client.get_stat_keys(adapter, kind)
+                    metric_catalogues[cat_key] = cat
+                except Exception as e:
+                    self._log(f"Could not load metric catalogue for {cat_key}: {e}")
+                    metric_catalogues[cat_key] = {}
+
+            cat = metric_catalogues[cat_key]
+            # Update group metric_set metadata
+            for sk in group.metric_set.stat_keys:
+                if sk in cat:
+                    group.metric_set.metadata[sk] = cat[sk]
+                else:
+                    if sk not in group.metric_set.metadata:
+                        group.metric_set.metadata[sk] = {"name": sk, "unit": "", "description": ""}
+                    all_warnings.append(f"Metric key '{sk}' not found in catalogue for {cat_key}")
+
+        # Step 3: Build unified execution plan (deduplicating queries for resources shared across groups)
+        # Map: resource_id -> set of all stat_keys needed for this resource
+        resource_stats_needed: Dict[str, Set[str]] = defaultdict(set)
+        for group in job.groups:
+            stat_keys = set(group.metric_set.stat_keys)
+            for obj in group_objects[group.group_id]:
+                resource_stats_needed[obj["resourceId"]].update(stat_keys)
+
+        total_resources = len(resource_stats_needed)
+        if total_resources == 0:
+            self._log("No resources to collect.")
+            completed_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return CollectionResult(
+                job_name=job.name,
+                started_at_utc=start_time_utc,
+                completed_at_utc=completed_at_utc,
+                status="success" if not all_errors else "partial",
+                samples=[],
+                resolved_resources=list(all_resolved_resources.values()),
+                errors=all_errors,
+                warnings=all_warnings,
+                stats={
+                    "api_calls": self.client.api_call_count,
+                    "elapsed_seconds": round(time.monotonic() - start_mono, 2),
+                    "objects_processed": 0,
+                    "metrics_processed": 0,
+                    "samples_retrieved": 0,
+                    "retry_count": self.client.retry_count,
+                },
+                metric_catalogues=metric_catalogues,
+            )
+
+        self._log(f"Constructed execution plan: {total_resources} unique resource(s) to query.")
+
+        # Step 4: Execute metric collection
+        # Calculate time range
+        time_range = job.time_range
+        begin_ms, end_ms = time_range.calculate_bounds()
+
+        # Group resources by their set of stat keys to batch together where possible
+        # Or partition by batch of resource IDs with the union of stat keys
+        raw_stats_by_resource: Dict[str, Dict[str, Dict[int, Optional[float]]]] = defaultdict(lambda: defaultdict(dict))
+
+        # We partition resources into batches of up to 40 resources
+        batch_size = 40
+        all_rids = list(resource_stats_needed.keys())
+
+        total_batches = (len(all_rids) + batch_size - 1) // batch_size
+        completed_resources = 0
+
+        for b_idx in range(total_batches):
+            if self.should_stop():
+                self._log("Collection cancelled.")
+                raise EngineError("Collection cancelled by user")
+
+            chunk_rids = all_rids[b_idx * batch_size : (b_idx + 1) * batch_size]
+            # Union of stat keys for this chunk
+            chunk_stat_keys: Set[str] = set()
+            for rid in chunk_rids:
+                chunk_stat_keys.update(resource_stats_needed[rid])
+
+            stat_keys_list = sorted(list(chunk_stat_keys))
+            self._log(f"Fetching batch [{b_idx + 1}/{total_batches}] ({len(chunk_rids)} resources, {len(stat_keys_list)} metrics)...",
+                      completed_resources, total_resources)
+
+            try:
+                if time_range.max_samples and time_range.mode == "relative":
+                    batch_res = self.client.get_resources_stats_latest(
+                        chunk_rids, stat_keys_list, max_samples=time_range.max_samples
+                    )
+                else:
+                    batch_res = self.client.get_resources_stats(
+                        chunk_rids,
+                        stat_keys_list,
+                        begin_ms=begin_ms,
+                        end_ms=end_ms,
+                        interval_type=time_range.interval_type,
+                        rollup_type=time_range.rollup_type,
+                    )
+
+                for rid, sdict in batch_res.items():
+                    for sk, ts_dict in sdict.items():
+                        raw_stats_by_resource[rid][sk].update(ts_dict)
+
+            except Exception as e:
+                msg = f"Failed to retrieve stats for batch {b_idx + 1}: {e}"
+                all_errors.append({"batch": b_idx + 1, "error": msg})
+                self._log(f"Batch error: {msg}")
+
+            completed_resources += len(chunk_rids)
+            self._log(f"Processed {completed_resources}/{total_resources} resources", completed_resources, total_resources)
+
+        # Step 5: Normalize and build samples per group
+        samples: List[MetricSample] = []
+        total_samples_count = 0
+
+        for group in job.groups:
+            group_id = group.group_id
+            group_name = group.name
+            group_kind = group.resource_kind
+            objs = group_objects.get(group_id, [])
+            stat_keys = group.metric_set.stat_keys
+
+            for obj in objs:
+                rid = obj["resourceId"]
+                rname = obj["name"]
+                res_series = raw_stats_by_resource.get(rid, {})
+
+                # Find all distinct timestamps across all requested stat keys for this resource
+                all_ts = sorted({ts for sk in stat_keys for ts in res_series.get(sk, {})})
+
+                # If no timestamps found, record that no data returned
+                if not all_ts:
+                    all_warnings.append(f"No metric data returned for resource '{rname}' in group '{group_name}'")
+
+                for ts in all_ts:
+                    iso_time = iso_utc_from_ms(ts)
+                    for sk in stat_keys:
+                        meta = group.metric_set.metadata.get(sk, {})
+                        val = res_series.get(sk, {}).get(ts)
+                        sample = MetricSample(
+                            group_id=group_id,
+                            group_name=group_name,
+                            resource_id=rid,
+                            resource_name=rname,
+                            resource_kind=group_kind,
+                            metric_key=sk,
+                            metric_name=meta.get("name", sk),
+                            timestamp_ms=ts,
+                            time_utc=iso_time,
+                            value=val,
+                            unit=meta.get("unit", ""),
+                        )
+                        samples.append(sample)
+                        total_samples_count += 1
+
+        elapsed = round(time.monotonic() - start_mono, 2)
+        status = "success"
+        if all_errors and not samples:
+            status = "error"
+        elif all_errors or all_warnings:
+            status = "partial" if all_errors else "success"
+
+        self._log(f"Collection complete: {total_samples_count} sample(s) collected in {elapsed}s.")
+        completed_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        return CollectionResult(
+            job_name=job.name,
+            started_at_utc=start_time_utc,
+            completed_at_utc=completed_at_utc,
+            status=status,
+            samples=samples,
+            resolved_resources=list(all_resolved_resources.values()),
+            errors=all_errors,
+            warnings=all_warnings,
+            stats={
+                "api_calls": self.client.api_call_count,
+                "elapsed_seconds": elapsed,
+                "objects_processed": total_resources,
+                "metrics_processed": len({sk for g in job.groups for sk in g.metric_set.stat_keys}),
+                "samples_retrieved": total_samples_count,
+                "retry_count": self.client.retry_count,
+            },
+            metric_catalogues=metric_catalogues,
+        )

@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "name": "Scenario B: Three Selected VMs",
+  "connection": {
+    "server": "vcf-ops.example.com",
+    "verify_ssl": true
+  },
+  "time_range": {
+    "mode": "relative",
+    "relative_preset": "1d",
+    "interval_minutes": 5,
+    "interval_type": "MINUTES",
+    "rollup_type": "AVG"
+  },
+  "groups": [
+    {
+      "group_id": "three-vms",
+      "name": "Selected Core VMs",
+      "resource_kind": "VirtualMachine",
+      "selector": {
+        "resource_kind": "VirtualMachine",
+        "selection_mode": "explicit",
+        "adapter_kind": "VMWARE",
+        "resource_ids": [
+          "vm-uuid-001",
+          "vm-uuid-002",
+          "vm-uuid-003"
+        ]
+      },
+      "metric_set": {
+        "stat_keys": [
+          "cpu|usage_average",
+          "mem|usage_average",
+          "cpu|readyPct"
+        ]
+      }
+    }
+  ],
+  "export_config": {
+    "formats": ["csv", "xlsx", "json"],
+    "timezone": "America/Chicago"
+  }
+}
