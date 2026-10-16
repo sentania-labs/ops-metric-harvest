@@ -10,9 +10,11 @@ FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 def sanitize_formula_injection(value: Any) -> Any:
     """Protect spreadsheet cells against formula injection attacks."""
-    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
-        # Prepend a single quote to force spreadsheet programs to treat it as plain text
-        return "'" + value
+    if isinstance(value, str):
+        stripped = value.lstrip()
+        if stripped.startswith(FORMULA_PREFIXES):
+            # Prepend a single quote to force spreadsheet programs to treat it as plain text
+            return "'" + value
     return value
 
 
@@ -50,7 +52,10 @@ def to_wide_rows(
     for s in samples:
         if s.metric_key not in metric_keys:
             metric_keys.append(s.metric_key)
-            lbl = f"{s.metric_name} ({s.unit})" if s.unit else s.metric_name
+            if s.metric_name and s.metric_name != s.metric_key:
+                lbl = f"{s.metric_key} | {s.metric_name} ({s.unit})" if s.unit else f"{s.metric_key} | {s.metric_name}"
+            else:
+                lbl = f"{s.metric_key} ({s.unit})" if s.unit else s.metric_key
             metric_labels[s.metric_key] = lbl
 
     headers = [

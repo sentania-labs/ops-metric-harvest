@@ -82,6 +82,29 @@ def sign_and_notarize_macos(binary_path: str) -> bool:
         return True
 
 
+def sign_linux_binary(binary_path: str) -> bool:
+    """Linux GPG detached signature hook."""
+    gpg_key = os.environ.get("GPG_KEY_ID")
+    gpg_passphrase = os.environ.get("GPG_PASSPHRASE")
+
+    if not gpg_key:
+        print("Notice: GPG_KEY_ID not set. Linux binary not GPG-signed (SHA-256 integrity only).", file=sys.stderr)
+        return False
+
+    sig_file = f"{binary_path}.asc"
+    if os.path.exists(sig_file):
+        os.remove(sig_file)
+
+    cmd = ["gpg", "--batch", "--yes", "--detach-sign", "--armor", "-u", gpg_key]
+    if gpg_passphrase:
+        cmd.extend(["--pinentry-mode", "loopback", "--passphrase", gpg_passphrase])
+    cmd.extend(["-o", sig_file, binary_path])
+
+    print(f"Signing {binary_path} with GPG ({gpg_key})...", file=sys.stderr)
+    res = subprocess.run(cmd)
+    return res.returncode == 0
+
+
 def main() -> int:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -112,8 +135,10 @@ def main() -> int:
         signed = sign_windows_binary(binary_path)
     elif system == "darwin":
         signed = sign_and_notarize_macos(binary_path)
+    elif system == "linux":
+        signed = sign_linux_binary(binary_path)
     else:
-        print(f"Linux binary ready at {binary_path}. Generating integrity hashes...", file=sys.stderr)
+        print(f"Platform {system} ready at {binary_path}. Generating integrity hashes...", file=sys.stderr)
 
     # Compute checksum
     checksum = sha256_file(binary_path)

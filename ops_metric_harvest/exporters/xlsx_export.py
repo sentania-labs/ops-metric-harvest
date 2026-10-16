@@ -6,13 +6,11 @@ import math
 import re
 import zipfile
 from collections.abc import Iterable
-from datetime import datetime
 from typing import Any, List, Tuple
 from xml.sax.saxutils import escape
 
 from ops_metric_harvest.exporters.base import (
     format_local_time,
-    get_timezone,
     sanitize_formula_injection,
     to_wide_rows,
 )
@@ -124,7 +122,7 @@ class FastXlsxWriter:
         parts = [f'<row r="{row_idx}">']
         for col_idx, (val, style_id) in enumerate(zip(values, styles), 1):
             cell_ref = f"{self.col_to_letter(col_idx)}{row_idx}"
-            if val is None or (isinstance(val, float) and math.isnan(val)):
+            if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
                 parts.append(f'<c r="{cell_ref}" s="{style_id}"/>')
                 continue
 
@@ -203,13 +201,6 @@ def export_xlsx(
     tz_name: str = "America/Chicago",
 ) -> str:
     """Export collection result to multi-sheet Excel workbook."""
-    tz, _ = get_timezone(tz_name)
-
-    def to_excel_date(timestamp_ms: int, zone: Any) -> float:
-        dt = datetime.fromtimestamp(timestamp_ms / 1000.0, zone).replace(tzinfo=None)
-        # Excel epoch starts 1899-12-30 due to historical leap-year bug in Lotus 1-2-3
-        return (dt - datetime(1899, 12, 30)).total_seconds() / 86400.0
-
     writer = FastXlsxWriter(file_path)
 
     # 1. Summary sheet

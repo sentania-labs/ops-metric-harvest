@@ -93,3 +93,47 @@ def test_cli_profiles_validate(capsys):
     finally:
         if os.path.exists(tf_name):
             os.remove(tf_name)
+
+
+def test_cli_collect_mismatched_dates(capsys):
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--server", "vcf-ops.example.com",
+        "--token", "tok",
+        "--kind", "HostSystem",
+        "--stat-keys", "cpu|usage",
+        "--start", "2026-10-01T00:00:00Z",
+    ])
+    ret = args.func(args)
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "Both --start and --end must be provided" in captured.err
+
+
+def test_cli_collect_latest_samples_conflict(capsys):
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--server", "vcf-ops.example.com",
+        "--token", "tok",
+        "--kind", "HostSystem",
+        "--stat-keys", "cpu|usage",
+        "--max-samples", "10",
+        "--start", "2026-10-01T00:00:00Z",
+        "--end", "2026-10-02T00:00:00Z",
+    ])
+    ret = args.func(args)
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "Cannot combine --max-samples with --start/--end" in captured.err
+
+
+def test_cli_profiles_run_nonexistent(capsys):
+    parser = build_parser()
+    args = parser.parse_args(["profiles", "run", "nonexistent_profile.json"])
+    ret = args.func(args)
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "Could not load profile" in captured.err
+

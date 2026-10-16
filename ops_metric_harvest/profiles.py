@@ -89,7 +89,7 @@ def validate_profile_dict(data: Dict[str, Any]) -> List[str]:
 
 
 def load_profile(file_path: str) -> Tuple[CollectionJob, List[str]]:
-    """Load and validate a collection job profile from a JSON file.
+    """Load and validate a collection job profile from a JSON or YAML file.
 
     Returns:
         Tuple of (CollectionJob, List of warnings)
@@ -98,10 +98,24 @@ def load_profile(file_path: str) -> Tuple[CollectionJob, List[str]]:
         raise FileNotFoundError(f"Profile file not found: {file_path}")
 
     with open(file_path, "r", encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ProfileValidationError(f"Malformed JSON in profile '{file_path}': {e}") from None
+        if file_path.endswith((".yaml", ".yml")):
+            try:
+                import yaml
+                data = yaml.safe_load(f)
+            except ImportError:
+                raise ProfileValidationError(
+                    "PyYAML package is required to read YAML profiles. Install pyyaml or use JSON format."
+                ) from None
+            except Exception as e:
+                raise ProfileValidationError(f"Malformed YAML in profile '{file_path}': {e}") from None
+        else:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ProfileValidationError(f"Malformed JSON in profile '{file_path}': {e}") from None
+
+    if not isinstance(data, dict):
+        raise ProfileValidationError(f"Profile file '{file_path}' must contain a JSON/YAML object")
 
     warnings = validate_profile_dict(data)
 
@@ -117,14 +131,23 @@ def load_profile(file_path: str) -> Tuple[CollectionJob, List[str]]:
 
 
 def save_profile(job: CollectionJob, file_path: str) -> str:
-    """Save a collection job profile to a JSON file, ensuring no secrets are stored."""
+    """Save a collection job profile to a JSON or YAML file, ensuring no secrets are stored."""
     payload = job.to_dict()
     # Enforce current schema version
     payload["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Write securely
     with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.write("\n")
+        if file_path.endswith((".yaml", ".yml")):
+            try:
+                import yaml
+                yaml.safe_dump(payload, f, sort_keys=False)
+            except ImportError:
+                raise ProfileValidationError(
+                    "PyYAML package is required to write YAML profiles. Install pyyaml or use JSON format."
+                ) from None
+        else:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
 
     return file_path

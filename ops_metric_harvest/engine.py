@@ -60,17 +60,76 @@ class CollectionEngine:
         warnings: List[str] = []
         errors: List[Dict[str, Any]] = []
 
-        # Populate cache for kind if needed
-        if kind not in all_inventory_cache:
-            self._log(f"Discovering inventory for resource kind '{kind}'...")
+        # Populate inventory for kind
+        inventory: List[Dict[str, Any]] = []
+
+        if mode == "search" and selector.search_query:
+            self._log(f"Searching inventory for '{selector.search_query}' in kind '{kind}'...")
             try:
-                all_inventory_cache[kind] = self.client.search_resources(kind)
+                inventory = self.client.search_resources(kind, name_query=selector.search_query)
             except Exception as e:
-                msg = f"Failed to list inventory for {kind}: {e}"
+                msg = f"Failed to search inventory for {kind}: {e}"
                 errors.append({"group": group.name, "resource_kind": kind, "error": msg})
                 return [], warnings, errors
+        elif mode == "explicit" and selector.names and len(selector.names) <= 10 and not selector.resource_ids:
+            if kind in all_inventory_cache:
+                inventory = all_inventory_cache[kind]
+            else:
+                self._log(f"Resolving {len(selector.names)} explicit object(s) for kind '{kind}'...")
+                targeted: List[Dict[str, Any]] = []
+                for n in selector.names:
+                    try:
+                        matches = self.client.search_resources(kind, name_query=n.strip())
+                        targeted.extend(matches)
+                    except Exception as e:
+                        logger.debug("Targeted lookup failed for %s: %s", n, e)
+                # Deduplicate targeted matches by resourceId
+                seen_target_ids: Set[str] = set()
+                deduped_targeted: List[Dict[str, Any]] = []
+                for r in targeted:
+                    rid = r.get("resourceId")
+                    if rid and rid not in seen_target_ids:
+                        seen_target_ids.add(rid)
+                        deduped_targeted.append(r)
+                    elif not rid:
+                        deduped_targeted.append(r)
+                targeted = deduped_targeted
 
-        inventory = all_inventory_cache[kind]
+                # If all found, use targeted list; otherwise fall back to full discovery
+                found_names = {r["name"].lower() for r in targeted}
+                if all(n.strip().lower() in found_names for n in selector.names):
+                    inventory = targeted
+                else:
+                    self._log(f"Discovering full inventory for resource kind '{kind}'...")
+                    try:
+                        all_inventory_cache[kind] = self.client.search_resources(kind)
+                        inventory = all_inventory_cache[kind]
+                    except Exception as e:
+                        msg = f"Failed to list inventory for {kind}: {e}"
+                        errors.append({"group": group.name, "resource_kind": kind, "error": msg})
+                        return [], warnings, errors
+        else:
+            if kind not in all_inventory_cache:
+                self._log(f"Discovering inventory for resource kind '{kind}'...")
+                try:
+                    all_inventory_cache[kind] = self.client.search_resources(kind)
+                except Exception as e:
+                    msg = f"Failed to list inventory for {kind}: {e}"
+                    errors.append({"group": group.name, "resource_kind": kind, "error": msg})
+                    return [], warnings, errors
+            inventory = all_inventory_cache[kind]
+        # Deduplicate inventory by resourceId
+        deduped_inventory: List[Dict[str, Any]] = []
+        seen_inv_ids: Set[str] = set()
+        for r in inventory:
+            rid = r.get("resourceId")
+            if rid and rid not in seen_inv_ids:
+                seen_inv_ids.add(rid)
+                deduped_inventory.append(r)
+            elif not rid:
+                deduped_inventory.append(r)
+        inventory = deduped_inventory
+
         name_to_resources: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         id_to_resource: Dict[str, Dict[str, Any]] = {}
         for res in inventory:
@@ -99,9 +158,14 @@ class CollectionEngine:
                     warnings.append(msg)
                     errors.append({"group": group.name, "resourceId": rid, "error": msg})
 
-            # Match by object names
+            # Match by object names or resource IDs
             for name in selector.names:
                 clean_name = name.strip()
+                if clean_name in id_to_resource:
+                    if id_to_resource[clean_name] not in resolved:
+                        resolved.append(id_to_resource[clean_name])
+                    continue
+
                 matches = name_to_resources.get(clean_name.lower(), [])
                 if len(matches) == 1:
                     if matches[0] not in resolved:
@@ -111,7 +175,7 @@ class CollectionEngine:
                     warnings.append(msg)
                     errors.append({"group": group.name, "name": clean_name, "error": msg})
                 else:
-                    msg = f"Resource named '{clean_name}' not found in {kind} inventory"
+                    msg = f"Resource '{clean_name}' not found by name or ID in {kind} inventory"
                     warnings.append(msg)
                     errors.append({"group": group.name, "name": clean_name, "error": msg})
 
@@ -137,18 +201,25 @@ class CollectionEngine:
                 return [], warnings, errors
 
             # Determine headers
-            header = [c.strip().lower() for c in raw_rows[0]]
+            import re
+            norm_header = [re.sub(r"[\s_\-\.\:]+", "", c.strip().lower()) for c in raw_rows[0]]
             data_start = 0
             name_idx = 0
             kind_idx = -1
 
-            if "objectname" in header or "name" in header:
-                data_start = 1
-                name_idx = header.index("objectname") if "objectname" in header else header.index("name")
-                if "resourcekind" in header:
-                    kind_idx = header.index("resourcekind")
-            elif len(raw_rows[0]) >= 2 and raw_rows[0][0].strip().lower() in ("objectname", "name"):
-                data_start = 1
+            name_aliases = ("objectname", "name", "object", "vmname", "hostname", "resourcename", "resourceid", "id")
+            kind_aliases = ("resourcekind", "kind", "objecttype", "resourcetype", "type")
+
+            for alias in name_aliases:
+                if alias in norm_header:
+                    data_start = 1
+                    name_idx = norm_header.index(alias)
+                    break
+
+            for alias in kind_aliases:
+                if alias in norm_header:
+                    kind_idx = norm_header.index(alias)
+                    break
 
             for row in raw_rows[data_start:]:
                 if not row or len(row) <= name_idx:
@@ -380,8 +451,10 @@ class CollectionEngine:
         status = "success"
         if all_errors and not samples:
             status = "error"
-        elif all_errors or all_warnings:
-            status = "partial" if all_errors else "success"
+        elif all_errors:
+            status = "partial"
+        else:
+            status = "success"
 
         self._log(f"Collection complete: {total_samples_count} sample(s) collected in {elapsed}s.")
         completed_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

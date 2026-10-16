@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import random
 import re
 import ssl
@@ -15,6 +16,25 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ops_metric_harvest.client")
+
+
+def safe_float(val: Any) -> Optional[float]:
+    """Safely convert value to float, returning None for blanks, nulls, or invalid data."""
+    if val is None:
+        return None
+    try:
+        if isinstance(val, (int, float)):
+            f = float(val)
+        else:
+            s = str(val).strip()
+            if not s or s.lower() in ("n/a", "null", "none", "nan", "inf", "-inf", "infinity", "-infinity"):
+                return None
+            f = float(s)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
 
 
 class OpsClientError(Exception):
@@ -405,4 +425,7 @@ class OpsClient:
                     results[rid][stat_key] = {}
 
                 for ts, val in zip(timestamps, data_points):
-                    results[rid][stat_key][int(ts)] = float(val) if val is not None else None
+                    try:
+                        results[rid][stat_key][int(ts)] = safe_float(val)
+                    except (ValueError, TypeError):
+                        results[rid][stat_key][int(ts)] = None

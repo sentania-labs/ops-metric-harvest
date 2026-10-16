@@ -247,41 +247,43 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
                 return self._send_response(500, {"error": f"Connection test error: {e}"})
 
         elif self.path == "/api/kinds":
-            server = body.get("server", "").strip()
-            client = self._create_client_from_body(body)
             try:
+                client = self._create_client_from_body(body)
                 kinds = client.list_resource_kinds(body.get("adapter_kind", "VMWARE"))
                 return self._send_response(200, {"kinds": kinds})
             except Exception as e:
-                return self._send_response(500, {"error": str(e)})
+                return self._send_response(400, {"error": str(e)})
 
         elif self.path == "/api/search-objects":
-            client = self._create_client_from_body(body)
-            kind = body.get("resource_kind", "VirtualMachine")
-            query = body.get("query")
-            limit = int(body.get("limit", 100))
             try:
+                client = self._create_client_from_body(body)
+                kind = body.get("resource_kind", "VirtualMachine")
+                query = body.get("query")
+                limit = int(body.get("limit", 100))
                 objs = client.search_resources(resource_kind=kind, name_query=query, max_resources=limit)
                 return self._send_response(200, {"objects": objs})
             except Exception as e:
-                return self._send_response(500, {"error": str(e)})
+                return self._send_response(400, {"error": str(e)})
 
         elif self.path == "/api/list-metrics":
-            client = self._create_client_from_body(body)
-            kind = body.get("resource_kind", "VirtualMachine")
-            adapter = body.get("adapter_kind", "VMWARE")
             try:
+                client = self._create_client_from_body(body)
+                kind = body.get("resource_kind", "VirtualMachine")
+                adapter = body.get("adapter_kind", "VMWARE")
                 cat = client.get_stat_keys(adapter, kind)
                 return self._send_response(200, {"metrics": cat})
             except Exception as e:
-                return self._send_response(500, {"error": str(e)})
+                return self._send_response(400, {"error": str(e)})
 
         elif self.path == "/api/parse-csv":
-            csv_text = body.get("csv_content", "")
-            lines = csv_text.strip().splitlines()
-            reader = csv.reader(lines)
-            rows = [r for r in reader if r and any(c.strip() for c in r)]
-            return self._send_response(200, {"rows": rows, "count": len(rows)})
+            try:
+                csv_text = body.get("csv_content", "")
+                lines = csv_text.strip().splitlines()
+                reader = csv.reader(lines)
+                rows = [r for r in reader if r and any(c.strip() for c in r)]
+                return self._send_response(200, {"rows": rows, "count": len(rows)})
+            except Exception as e:
+                return self._send_response(400, {"error": str(e)})
 
         elif self.path == "/api/run":
             if GUI_JOB.status == "running":
@@ -291,10 +293,9 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
                 job_data = body.get("job", {})
                 validate_profile_dict(job_data)
                 job = CollectionJob.from_dict(job_data)
+                client = self._create_client_from_body(body.get("auth", {}))
             except Exception as e:
-                return self._send_response(400, {"error": f"Invalid collection job: {e}"})
-
-            client = self._create_client_from_body(body.get("auth", {}))
+                return self._send_response(400, {"error": f"Failed to initialize collection: {e}"})
 
             GUI_JOB.reset()
             GUI_JOB.status = "running"
@@ -339,11 +340,19 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
 
     def _create_client_from_body(self, data: Dict[str, Any]) -> OpsClient:
         server = data.get("server", "").strip()
+        if not server:
+            raise ValueError("VCF Operations server address is required")
         verify = bool(data.get("verify_ssl", True))
         token = data.get("token") or None
         client = OpsClient(server=server, token=token, verify=verify)
-        if not token and data.get("username"):
-            client.login(data["username"], data.get("password", ""), data.get("auth_source"))
+        if not token:
+            user = data.get("username", "").strip()
+            if not user:
+                raise ValueError("Username is required when no token is provided")
+            pwd = data.get("password", "")
+            if not pwd:
+                raise ValueError("Password is required when no token is provided")
+            client.login(user, pwd, data.get("auth_source"))
         return client
 
 

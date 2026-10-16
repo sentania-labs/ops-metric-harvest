@@ -46,7 +46,10 @@ def get_client(
     timeout: int = 120,
     quiet: bool = False,
 ) -> OpsClient:
-    """Instantiate and authenticate an OpsClient."""
+    if not server or not str(server).strip():
+        eprint("Error: VCF Operations server address is required. Use --server or specify in profile.")
+        sys.exit(1)
+
     tok = token or os.environ.get("VCFOPS_TOKEN")
     verify = not insecure
 
@@ -320,9 +323,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
         selector.csv_path = args.objects
     else:
         # Comma-separated list of IDs or names
+        import re
         items = [i.strip() for i in args.objects.split(",") if i.strip()]
         selector.selection_mode = "explicit"
         selector.names = items
+        selector.resource_ids = [i for i in items if re.match(r"^[0-9a-fA-F-]{32,38}$", i)]
 
     group = CollectionGroup(
         name=f"CLI {args.kind} Group",
@@ -332,6 +337,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
     )
 
     # Build time range
+    if args.max_samples and (args.start or args.end):
+        eprint("Error: Cannot combine --max-samples with --start/--end absolute time range.")
+        return 1
+
+    if bool(args.start) != bool(args.end):
+        eprint("Error: Both --start and --end must be provided for an absolute time range.")
+        return 1
+
     if args.start and args.end:
         time_range = TimeRange(
             mode="absolute",

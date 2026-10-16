@@ -106,3 +106,58 @@ def test_save_and_load_profile():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def test_yaml_save_and_load():
+    grp = CollectionGroup(
+        name="YAML Group",
+        resource_kind="HostSystem",
+        selector=ObjectSelector(resource_kind="HostSystem", selection_mode="all"),
+        metric_set=MetricSet(stat_keys=["cpu|usage"]),
+    )
+    job = CollectionJob(
+        name="YAML Job",
+        groups=[grp],
+        time_range=TimeRange(mode="relative", relative_preset="7d"),
+        connection={"server": "vcf-ops.example.com"},
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as tf:
+        path = tf.name
+
+    try:
+        saved_path = save_profile(job, path)
+        assert os.path.exists(saved_path)
+
+        loaded_job, warns = load_profile(saved_path)
+        assert loaded_job.name == "YAML Job"
+        assert len(loaded_job.groups) == 1
+        assert loaded_job.groups[0].resource_kind == "HostSystem"
+        assert loaded_job.groups[0].metric_set.stat_keys == ["cpu|usage"]
+        assert len(warns) == 0
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def test_yaml_missing_dependency_raises():
+    from unittest.mock import patch
+
+    with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as tf:
+        tf.write(b"dummy: true\n")
+        path = tf.name
+
+    try:
+        with patch.dict("sys.modules", {"yaml": None}):
+            with pytest.raises(ProfileValidationError) as exc_load:
+                load_profile(path)
+            assert "PyYAML" in str(exc_load.value)
+
+            job = CollectionJob(name="Test", groups=[], time_range=TimeRange())
+            with pytest.raises(ProfileValidationError) as exc_save:
+                save_profile(job, path)
+            assert "PyYAML" in str(exc_save.value)
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+

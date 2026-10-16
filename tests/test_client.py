@@ -79,3 +79,22 @@ def test_client_retries_on_503():
             res = client._request("GET", "/test")
             assert res["status"] == "recovered"
             assert client.retry_count == 2
+
+
+def test_safe_float():
+    from ops_metric_harvest.client import safe_float
+
+    assert safe_float(42) == 42.0
+    assert safe_float("123.45") == 123.45
+    assert safe_float("-0.5") == -0.5
+    assert safe_float(1e-4) == 0.0001
+    assert safe_float(None) is None
+    assert safe_float("") is None
+    assert safe_float("N/A") is None
+    assert safe_float("invalid") is None
+    assert safe_float("inf") is None
+    assert safe_float("-infinity") is None
+    assert safe_float("nan") is None
+    assert safe_float(float("inf")) is None
+    assert safe_float(float("nan")) is None
+
