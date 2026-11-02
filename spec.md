@@ -251,7 +251,6 @@ Retry transient failures with bounded exponential backoff and jitter, respecting
 - Never write secrets to application logs, history, profiles, or exports.
 - Redact authentication headers and credentials from errors.
 - Run no local web interface; the native GUI opens no listening port.
-- Protect local state-changing requests from cross-origin attacks.
 - Avoid loading remote HTML or scripts into a privileged context.
 - Limit request concurrency and memory usage.
 - Apply output size and sample-count preflight estimates.
