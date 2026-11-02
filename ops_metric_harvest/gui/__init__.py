@@ -1,5 +1,1 @@
-"""GUI package for ops-metric-harvest."""
-
-from ops_metric_harvest.gui.server import run_gui_server
-
-__all__ = ["run_gui_server"]
+"""Native Qt desktop interface. Qt imports remain lazy for CLI users."""

@@ -61,7 +61,7 @@ jobs:
       - name: Install PyInstaller
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller -e ".[yaml]"
 
       - name: Build standalone executable
         env:
@@ -79,6 +79,19 @@ jobs:
         run: |
           ./dist/${{ matrix.target_binary }} --help
           ./dist/${{ matrix.target_binary }} profiles validate examples/profiles/scenario_a_all_hosts.json
+
+      - name: Install headless GUI runtime (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+
+      - name: Smoke native desktop window
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a ./dist/${{ matrix.target_binary }} gui --screenshot connection.png
+          else
+            QT_QPA_PLATFORM=offscreen ./dist/${{ matrix.target_binary }} gui --screenshot connection.png
+          fi
 
       - name: Stage named release artifact
         shell: bash
@@ -115,7 +128,7 @@ jobs:
       - name: Generate unified checksum manifest
         run: |
           cd release-assets
-          cat *.sha256 > SHA256SUMS.txt || true
+          cat -- *.sha256 > SHA256SUMS.txt || true
 
       - name: Publish GitHub Release
         env:

@@ -12,7 +12,7 @@ authors = [
 ]
 license = { text = "MIT" }
 requires-python = ">=3.9"
-dependencies = []
+dependencies = ["PySide6>=6.6,<7", "tzdata>=2024.1; sys_platform == 'win32'"]
 
 [project.scripts]
 ops-metric-harvest = "ops_metric_harvest.cli:main"
@@ -20,6 +20,7 @@ ops-metric-harvest = "ops_metric_harvest.cli:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-qt>=4.4",
     "ruff>=0.4",
     "pyyaml>=6.0",
 ]
@@ -39,3 +40,9 @@ ignore = ["E501"]
 pythonpath = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.setuptools.packages.find]
+include = ["ops_metric_harvest*"]
+
+[tool.setuptools.package-data]
+"ops_metric_harvest.gui" = ["assets/*.qss", "assets/*.json"]

@@ -56,6 +56,7 @@ class OpsClient:
         timeout: int = 120,
         retries: int = 3,
         token_prefix: str = "OpsToken",
+        ca_bundle: Optional[str] = None,
     ):
         if not server:
             raise ValueError("Server FQDN or IP is required")
@@ -79,6 +80,8 @@ class OpsClient:
 
         # SSL context
         self.ctx = ssl.create_default_context()
+        if verify and ca_bundle:
+            self.ctx.load_verify_locations(cafile=ca_bundle)
         if not verify:
             self.ctx.check_hostname = False
             self.ctx.verify_mode = ssl.CERT_NONE
@@ -203,6 +206,11 @@ class OpsClient:
             # Fallback to checking resources endpoint
             data = self._request("GET", "/resources", params={"pageSize": 1, "_no_links": "true"})
             return {"status": "ok", "sample_resources": data}
+
+    def list_auth_sources(self) -> List[str]:
+        """Discover login source names; the endpoint does not require authentication."""
+        data = self._request("GET", "/auth/sources")
+        return [source["name"] for source in data.get("sources", []) if source.get("name")]
 
     def list_resource_kinds(self, adapter_kind: str = "VMWARE") -> List[str]:
         """Discover resource kinds supported by the server."""

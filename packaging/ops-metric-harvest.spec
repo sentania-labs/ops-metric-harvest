@@ -1,59 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files
 
-block_cipher = None
-
+root = Path(SPECPATH).parent
+# PyInstaller's PySide6.QtWidgets/QtGui hooks collect the Qt platform and image
+# plugins. Collect only our assets rather than every unused Qt module.
 a = Analysis(
-    ['../ops_metric_harvest/cli.py'],
-    pathex=['..'],
+    [str(root / 'ops_metric_harvest' / 'cli.py')],
+    pathex=[str(root)],
     binaries=[],
-    datas=[],
-    hiddenimports=[
-        'ops_metric_harvest',
-        'ops_metric_harvest.client',
-        'ops_metric_harvest.engine',
-        'ops_metric_harvest.models',
-        'ops_metric_harvest.profiles',
-        'ops_metric_harvest.starter_metrics',
-        'ops_metric_harvest.version',
-        'ops_metric_harvest.exporters',
-        'ops_metric_harvest.exporters.base',
-        'ops_metric_harvest.exporters.csv_export',
-        'ops_metric_harvest.exporters.json_export',
-        'ops_metric_harvest.exporters.xlsx_export',
-        'ops_metric_harvest.exporters.table_export',
-        'ops_metric_harvest.gui',
-        'ops_metric_harvest.gui.server',
-    ],
+    datas=collect_data_files('ops_metric_harvest.gui') + collect_data_files('tzdata'),
+    hiddenimports=['ops_metric_harvest.gui.app', 'PySide6.QtWidgets', 'yaml'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=['PyQt5', 'PyQt6', 'PySide2'],
     noarchive=False,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
+pyz = PYZ(a.pure)
 exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
+    pyz, a.scripts, a.binaries, a.datas, [],
     name='ops-metric-harvest',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    upx=False,
+    console=True,  # Preserve CLI stdout/stderr and automation on Windows.
 )
