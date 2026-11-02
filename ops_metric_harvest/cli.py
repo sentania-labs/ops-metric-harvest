@@ -45,6 +45,7 @@ def get_client(
     insecure: bool = False,
     timeout: int = 120,
     quiet: bool = False,
+    ca_bundle: Optional[str] = None,
 ) -> OpsClient:
     if not server or not str(server).strip():
         eprint("Error: VCF Operations server address is required. Use --server or specify in profile.")
@@ -53,7 +54,7 @@ def get_client(
     tok = token or os.environ.get("VCFOPS_TOKEN")
     verify = not insecure
 
-    client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout)
+    client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout, ca_bundle=ca_bundle)
 
     if not tok:
         username = user or os.environ.get("VCFOPS_USER")
@@ -409,6 +410,7 @@ def cmd_profiles_run(args: argparse.Namespace) -> int:
         auth_source=args.auth_source or job.connection.get("auth_source"),
         insecure=insecure,
         quiet=args.quiet,
+        ca_bundle=job.connection.get("ca_bundle") or None,
     )
 
     formats = [f.strip() for f in args.format.split(",") if f.strip()] if args.format else job.export_config.get("formats", ["csv", "xlsx"])
