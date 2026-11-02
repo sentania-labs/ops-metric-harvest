@@ -1,0 +1,6 @@
+ObjectName,ResourceKind
+esx-prod-01.int.sentania.net,HostSystem
+esx-prod-02.int.sentania.net,HostSystem
+app-server-01,VirtualMachine
+db-server-01,VirtualMachine
+web-proxy-01,VirtualMachine

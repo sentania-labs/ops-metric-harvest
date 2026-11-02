@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "name": "Scenario A: All Host Systems",
+  "connection": {
+    "server": "vcf-ops.example.com",
+    "verify_ssl": true
+  },
+  "time_range": {
+    "mode": "relative",
+    "relative_preset": "7d",
+    "interval_minutes": 5,
+    "interval_type": "MINUTES",
+    "rollup_type": "AVG"
+  },
+  "groups": [
+    {
+      "group_id": "all-hosts",
+      "name": "All ESXi Hosts",
+      "resource_kind": "HostSystem",
+      "selector": {
+        "resource_kind": "HostSystem",
+        "selection_mode": "all",
+        "adapter_kind": "VMWARE"
+      },
+      "metric_set": {
+        "stat_keys": [
+          "cpu|capacity_usagepct_average",
+          "cpu|coreUtilization_average",
+          "mem|active_average"
+        ]
+      }
+    }
+  ],
+  "export_config": {
+    "formats": ["csv", "xlsx", "json"],
+    "timezone": "America/Chicago"
+  }
+}
