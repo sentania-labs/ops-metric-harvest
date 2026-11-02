@@ -54,7 +54,11 @@ def get_client(
     tok = token or os.environ.get("VCFOPS_TOKEN")
     verify = not insecure
 
-    client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout, ca_bundle=ca_bundle)
+    try:
+        client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout, ca_bundle=ca_bundle)
+    except OSError as e:
+        eprint(f"Error: could not load trusted CA bundle '{ca_bundle}': {e}")
+        sys.exit(1)
 
     if not tok:
         username = user or os.environ.get("VCFOPS_USER")

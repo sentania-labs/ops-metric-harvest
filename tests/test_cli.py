@@ -137,3 +137,33 @@ def test_cli_profiles_run_nonexistent(capsys):
     captured = capsys.readouterr()
     assert "Could not load profile" in captured.err
 
+
+
+@pytest.mark.parametrize("bundle_kind", ["missing", "malformed"])
+def test_cli_profiles_run_bad_ca_bundle(tmp_path, capsys, bundle_kind):
+    bundle = tmp_path / "ca.pem"
+    if bundle_kind == "malformed":
+        bundle.write_text("not a certificate")
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({
+        "schema_version": "1.0",
+        "name": "CA Test",
+        "connection": {"server": "vcf-ops.example.com", "verify_ssl": True, "ca_bundle": str(bundle)},
+        "time_range": {"mode": "relative", "relative_preset": "7d"},
+        "groups": [
+            {
+                "name": "G1",
+                "resource_kind": "HostSystem",
+                "selector": {"selection_mode": "all", "resource_kind": "HostSystem"},
+                "metric_set": {"stat_keys": ["cpu|usage"]},
+            }
+        ],
+    }))
+    parser = build_parser()
+    args = parser.parse_args(["profiles", "run", str(profile), "--token", "t"])
+    with pytest.raises(SystemExit) as exc:
+        args.func(args)
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "trusted CA bundle" in err
+    assert "Traceback" not in err
