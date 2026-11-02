@@ -98,3 +98,26 @@ def test_safe_float():
     assert safe_float(float("inf")) is None
     assert safe_float(float("nan")) is None
 
+
+def test_client_stats_exhausted_fallback_raises():
+    from ops_metric_harvest.client import OpsClientError
+
+    client = OpsClient("vcf-ops.example.com", token="tok", verify=False)
+    with patch.object(client, "_request", side_effect=OpsClientError("Server exploded")):
+        with pytest.raises(OpsClientError) as exc_info:
+            client.get_resources_stats(
+                resource_ids=["vm-001", "vm-002"],
+                stat_keys=["cpu|usage_average"],
+                begin_ms=1000,
+                end_ms=2000,
+            )
+        assert "Failed to retrieve stats for all 2 resources in chunk" in str(exc_info.value)
+
+        with pytest.raises(OpsClientError) as exc_latest:
+            client.get_resources_stats_latest(
+                resource_ids=["vm-001"],
+                stat_keys=["cpu|usage_average"],
+            )
+        assert "Failed to retrieve latest stats for all 1 resources in chunk" in str(exc_latest.value)
+
+

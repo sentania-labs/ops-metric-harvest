@@ -604,14 +604,17 @@ HTML_PAGE = """<!DOCTYPE html>
     function addGroup(initialData = null) {
       const gid = initialData ? initialData.group_id : "grp_" + Math.random().toString(36).substring(2, 8);
       const defaultKind = initialData ? initialData.resource_kind : "VirtualMachine";
+      const sel = initialData && initialData.selector ? initialData.selector : {};
       const g = {
         group_id: gid,
         name: initialData ? initialData.name : "Group " + (groups.length + 1),
         resource_kind: defaultKind,
-        selection_mode: initialData ? initialData.selector.selection_mode : "all",
-        search_query: initialData && initialData.selector.search_query ? initialData.selector.search_query : "",
-        stat_keys: initialData ? initialData.metric_set.stat_keys : (STARTER_SETS[defaultKind] ? STARTER_SETS[defaultKind].map(s => s.key) : []),
-        csv_content: "",
+        selection_mode: sel.selection_mode || "all",
+        search_query: sel.search_query || "",
+        names: sel.names ? [...sel.names] : [],
+        resource_ids: sel.resource_ids ? [...sel.resource_ids] : [],
+        csv_content: sel.csv_content || "",
+        stat_keys: initialData && initialData.metric_set ? initialData.metric_set.stat_keys : (STARTER_SETS[defaultKind] ? STARTER_SETS[defaultKind].map(s => s.key) : []),
       };
       groups.push(g);
       renderGroups();
@@ -652,6 +655,7 @@ HTML_PAGE = """<!DOCTYPE html>
               <select onchange="groups[${idx}].selection_mode=this.value; renderGroups();">
                 <option value="all" ${g.selection_mode === "all" ? "selected" : ""}>All Objects of Kind</option>
                 <option value="search" ${g.selection_mode === "search" ? "selected" : ""}>Filter by Name</option>
+                <option value="explicit" ${g.selection_mode === "explicit" ? "selected" : ""}>Explicit Names/IDs</option>
                 <option value="imported" ${g.selection_mode === "imported" ? "selected" : ""}>Import Object Names (CSV)</option>
               </select>
             </div>
@@ -659,6 +663,11 @@ HTML_PAGE = """<!DOCTYPE html>
             <div>
               <label>Name Contains Filter</label>
               <input type="text" value="${g.search_query}" placeholder="e.g. prod-esx" onchange="groups[${idx}].search_query=this.value">
+            </div>` : ''}
+            ${g.selection_mode === 'explicit' ? `
+            <div style="grid-column: 1 / -1;">
+              <label>Explicit Object Names or IDs (comma-separated or one per line)</label>
+              <textarea rows="2" placeholder="e.g. app-vm-01, app-vm-02" onchange="updateGroupExplicitObjects(${idx}, this.value)">${(g.names && g.names.length > 0 ? g.names : (g.resource_ids || [])).join(', ')}</textarea>
             </div>` : ''}
             ${g.selection_mode === 'imported' ? `
             <div style="grid-column: 1 / -1;">
@@ -697,8 +706,18 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
+    function updateGroupExplicitObjects(idx, rawText) {
+      const items = rawText.split(/[,\\r\\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+      const uuidRe = /^[0-9a-fA-F-]{32,38}$/;
+      groups[idx].names = items.filter(i => !uuidRe.test(i));
+      groups[idx].resource_ids = items.filter(i => uuidRe.test(i));
+      if (groups[idx].names.length === 0 && items.length > 0) {
+        groups[idx].names = items;
+      }
+    }
+
     function updateGroupStatKeys(idx, rawText) {
-      const keys = rawText.split(/[,\n]/).map(s => s.strip ? s.strip() : s.trim()).filter(s => s.length > 0);
+      const keys = rawText.split(/[,\\r\\n]+/).map(s => s.trim()).filter(s => s.length > 0);
       groups[idx].stat_keys = keys;
       updatePreflight();
     }
@@ -756,7 +775,9 @@ HTML_PAGE = """<!DOCTYPE html>
           selection_mode: g.selection_mode,
           adapter_kind: "VMWARE",
           search_query: g.search_query,
-          csv_content: g.csv_content,
+          names: g.names || [],
+          resource_ids: g.resource_ids || [],
+          csv_content: g.csv_content || "",
         },
         metric_set: {
           stat_keys: g.stat_keys,

@@ -232,6 +232,12 @@ class CollectionEngine:
                 if req_kind.lower() != kind.lower():
                     continue
 
+                # Check id_to_resource first (for UUID or resourceId columns)
+                if req_name in id_to_resource:
+                    if id_to_resource[req_name] not in resolved:
+                        resolved.append(id_to_resource[req_name])
+                    continue
+
                 matches = name_to_resources.get(req_name.lower(), [])
                 if len(matches) == 1:
                     if matches[0] not in resolved:
@@ -241,7 +247,7 @@ class CollectionEngine:
                     warnings.append(msg)
                     errors.append({"group": group.name, "name": req_name, "error": msg})
                 else:
-                    msg = f"Imported resource '{req_name}' not found in {kind} inventory"
+                    msg = f"Imported resource '{req_name}' not found by name or ID in {kind} inventory"
                     warnings.append(msg)
                     errors.append({"group": group.name, "name": req_name, "error": msg})
 
@@ -327,7 +333,7 @@ class CollectionEngine:
                 job_name=job.name,
                 started_at_utc=start_time_utc,
                 completed_at_utc=completed_at_utc,
-                status="success" if not all_errors else "partial",
+                status="error" if all_errors else "success",
                 samples=[],
                 resolved_resources=list(all_resolved_resources.values()),
                 errors=all_errors,

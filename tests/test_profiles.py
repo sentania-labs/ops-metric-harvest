@@ -39,6 +39,21 @@ def test_validate_profile_valid():
     assert len(warns) == 0
 
 
+def test_selector_csv_content_serialization():
+    sel = ObjectSelector(
+        resource_kind="VirtualMachine",
+        selection_mode="imported",
+        csv_content="ObjectName,ResourceKind\nvm-01,VirtualMachine\n",
+    )
+    d = sel.to_dict()
+    assert d.get("csv_content") == "ObjectName,ResourceKind\nvm-01,VirtualMachine\n"
+
+    sel2 = ObjectSelector.from_dict(d)
+    assert sel2.csv_content == "ObjectName,ResourceKind\nvm-01,VirtualMachine\n"
+    assert sel2.selection_mode == "imported"
+
+
+
 def test_validate_profile_strips_secrets():
     data_with_secrets = {
         "schema_version": "1.0",

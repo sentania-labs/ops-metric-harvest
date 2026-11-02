@@ -81,6 +81,8 @@ class ObjectSelector:
             d["names"] = list(self.names)
         if self.csv_path:
             d["csv_path"] = self.csv_path
+        if self.csv_content:
+            d["csv_content"] = self.csv_content
         return d
 
     @classmethod
@@ -93,6 +95,7 @@ class ObjectSelector:
             resource_ids=list(data.get("resource_ids", [])),
             names=list(data.get("names", [])),
             csv_path=data.get("csv_path"),
+            csv_content=data.get("csv_content"),
         )
 
 

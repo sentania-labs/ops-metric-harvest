@@ -336,7 +336,13 @@ class OpsClient:
                 data = self._request("GET", "/resources/stats", params=params)
                 self._parse_stats_response(data, results)
             except Exception as e:
-                logger.warning("Batched stats failed for chunk of %d resources (%s). Falling back to per-resource queries.", len(chunk_rids), e)
+                logger.warning(
+                    "Batched stats failed for chunk of %d resources (%s). Falling back to per-resource queries.",
+                    len(chunk_rids),
+                    e,
+                )
+                failed_rids: List[str] = []
+                last_err = e
                 # Fallback to single-resource queries for this chunk
                 for single_rid in chunk_rids:
                     single_params: Dict[str, Any] = {
@@ -353,6 +359,13 @@ class OpsClient:
                         self._parse_stats_response(s_data, results)
                     except Exception as s_err:
                         logger.error("Failed to retrieve stats for single resource %s: %s", single_rid, s_err)
+                        failed_rids.append(single_rid)
+                        last_err = s_err
+
+                if len(failed_rids) == len(chunk_rids):
+                    raise OpsClientError(
+                        f"Failed to retrieve stats for all {len(chunk_rids)} resources in chunk: {last_err}"
+                    ) from last_err
 
         return results
 
@@ -383,6 +396,8 @@ class OpsClient:
                 self._parse_stats_response(data, results)
             except Exception as e:
                 logger.warning("Batched stats/latest failed (%s), falling back to single resource requests.", e)
+                failed_rids = []
+                last_err = e
                 for single_rid in chunk_rids:
                     s_params: Dict[str, Any] = {
                         "resourceId": [single_rid],
@@ -395,6 +410,13 @@ class OpsClient:
                         self._parse_stats_response(s_data, results)
                     except Exception as s_err:
                         logger.error("Failed to retrieve latest stats for %s: %s", single_rid, s_err)
+                        failed_rids.append(single_rid)
+                        last_err = s_err
+
+                if len(failed_rids) == len(chunk_rids):
+                    raise OpsClientError(
+                        f"Failed to retrieve latest stats for all {len(chunk_rids)} resources in chunk: {last_err}"
+                    ) from last_err
 
         return results
 
