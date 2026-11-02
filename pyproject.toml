@@ -21,6 +21,10 @@ ops-metric-harvest = "ops_metric_harvest.cli:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    "pyyaml>=6.0",
+]
+yaml = [
+    "pyyaml>=6.0",
 ]
 
 [tool.ruff]

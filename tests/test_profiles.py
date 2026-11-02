@@ -109,6 +109,7 @@ def test_save_and_load_profile():
 
 
 def test_yaml_save_and_load():
+    pytest.importorskip("yaml")
     grp = CollectionGroup(
         name="YAML Group",
         resource_kind="HostSystem",
