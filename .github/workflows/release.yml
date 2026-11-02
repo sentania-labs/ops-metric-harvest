@@ -82,7 +82,7 @@ jobs:
 
       - name: Install headless GUI runtime (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xfixes0 libfontconfig1 libglib2.0-0t64 libdbus-1-3
 
       - name: Smoke native desktop window
         shell: bash
