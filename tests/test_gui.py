@@ -172,7 +172,24 @@ def test_metric_catalogue_and_kind_reset(window, qtbot):
     window.metrics.refresh.click()
     wait_task(qtbot, window)
     assert "cpu|test" in window.metrics.catalogue
-    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
+    assert not window.metrics.value().stat_keys
+    assert window.metrics.kind == "HostSystem"
+
+
+def test_typing_scope_keeps_metrics_until_committed(window, qtbot):
+    selected = window.metrics.value().stat_keys
+    assert selected
+    window.objects.adapter.setText("VMWAR")
+    window.objects.kind.lineEdit().setText("Host")
+    assert window.metrics.value().stat_keys == selected
+    window.objects.adapter.setText("VMWARE")
+    window.objects.kind.lineEdit().setText("VirtualMachine")
+    window.objects.adapter.editingFinished.emit()
+    assert window.metrics.value().stat_keys == selected
+    window.objects.kind.lineEdit().setText("HostSystem")
+    assert window.metrics.value().stat_keys == selected
+    window.objects.kind.lineEdit().editingFinished.emit()
     assert not window.metrics.value().stat_keys
     assert window.metrics.kind == "HostSystem"
 
@@ -256,7 +273,7 @@ def test_preflight_rejects_missing_metrics(window):
 def test_collection_background_exports_and_preview(window, qtbot, tmp_path, mock_client):
     window.client_factory = Mock(return_value=mock_client)
     # The all-VM fixture intentionally returns only unrelated misalignment keys.
-    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
     window.metrics.select_starters()
     window.collection.output.edit.setText(str(tmp_path))
     for check in window.collection.formats.values():
@@ -322,7 +339,7 @@ def test_engine_cancellation_returns_cancelled_summary(window, qtbot, tmp_path, 
 
 def test_export_failure_keeps_results(window, qtbot, tmp_path, mock_client):
     window.client_factory = Mock(return_value=mock_client)
-    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
     window.metrics.select_starters()
     destination = tmp_path / "not-a-directory"
     destination.write_text("keep")

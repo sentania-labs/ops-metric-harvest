@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QScrollArea, QFrame, QLabel, QPushButton, QFileDialog,
 )
 from ops_metric_harvest.models import CollectionJob, CollectionGroup, ObjectSelector, MetricSet
+from ops_metric_harvest.starter_metrics import STARTER_METRIC_SETS
 from ops_metric_harvest.profiles import load_profile, save_profile, validate_profile_dict
 from .theme import apply_theme
 from .workers import Task, make_client, collect
@@ -22,7 +23,8 @@ from .screens.profiles import ProfilesPage
 
 
 def new_group(number):
-    return CollectionGroup(f"Group {number}", "VirtualMachine", ObjectSelector("VirtualMachine"), MetricSet())
+    starters = {m["key"]: dict(m) for m in STARTER_METRIC_SETS.get("VirtualMachine", [])}
+    return CollectionGroup(f"Group {number}", "VirtualMachine", ObjectSelector("VirtualMachine"), MetricSet(list(starters), starters))
 
 
 class MainWindow(QMainWindow):
@@ -31,7 +33,6 @@ class MainWindow(QMainWindow):
         self.client_factory = client_factory
         self.task = None
         self.closing = False
-        self.loading_group = False
         self.group_index = 0
         self.job = CollectionJob("Metrics collection", [new_group(1)])
         self.setWindowTitle("VCF Operations Metrics Explorer")
@@ -100,20 +101,18 @@ class MainWindow(QMainWindow):
         self.group_picker.currentIndexChanged.connect(self.switch_group)
         self.add_group_button.clicked.connect(self.add_group)
         self.remove_group_button.clicked.connect(self.remove_group)
-        self.objects.kind_changed.connect(self.change_kind)
-        self.objects.adapter.textChanged.connect(self.change_adapter)
+        self.objects.scopeChanged.connect(self.change_scope)
+        self.objects.kindsRequested.connect(self.load_kinds)
+        self.objects.previewRequested.connect(self.preview_objects)
+        self.metrics.catalogueRequested.connect(self.load_metrics)
         self.connection.test.clicked.connect(self.test_connection)
         self.connection.sources.clicked.connect(self.load_sources)
         self.connection.changed.connect(self.invalidate_catalogue)
-        self.objects.refresh.clicked.connect(self.load_kinds)
-        self.objects.preview.clicked.connect(self.preview_objects)
-        self.metrics.refresh.clicked.connect(self.load_metrics)
         self.profiles.load_button.clicked.connect(self.choose_profile)
         self.profiles.save_button.clicked.connect(self.choose_save_profile)
         self.run_page.start.clicked.connect(self.start_collection)
         self.run_page.cancel.clicked.connect(self.cancel_collection)
         self.load_group()
-        self.metrics.select_starters()
         self.nav.setCurrentRow(0)
         apply_theme(QApplication.instance(), theme)
 
@@ -129,22 +128,20 @@ class MainWindow(QMainWindow):
 
     def store_group(self):
         group = self.job.groups[self.group_index]
-        group.name = self.objects.name.text().strip()
+        group.name = self.objects.group_name()
         group.selector = self.objects.value()
         group.resource_kind = group.selector.resource_kind
         group.metric_set = self.metrics.value()
         self.group_picker.setItemText(self.group_index, group.name or "Unnamed group")
 
     def load_group(self):
-        self.loading_group = True
         group = self.job.groups[self.group_index]
         self.objects.load(group)
         self.metrics.load(group.metric_set, group.resource_kind)
-        self.loading_group = False
         self.remove_group_button.setEnabled(len(self.job.groups) > 1)
 
     def switch_group(self, index):
-        if index < 0 or self.loading_group:
+        if index < 0:
             return
         self.store_group()
         self.group_index = index
@@ -163,7 +160,6 @@ class MainWindow(QMainWindow):
         self.job.groups.append(new_group(len(self.job.groups)+1))
         self.group_index = len(self.job.groups)-1
         self.rebuild_groups()
-        self.metrics.select_starters()
 
     def remove_group(self):
         if len(self.job.groups) > 1:
@@ -171,20 +167,14 @@ class MainWindow(QMainWindow):
             self.group_index = max(0, self.group_index-1)
             self.rebuild_groups()
 
-    def change_kind(self, kind):
-        if not self.loading_group:
-            self.metrics.load(MetricSet(), kind)
-            self.objects.matches.clear()
-            self.objects.status.clear()
-
-    def change_adapter(self):
-        if not self.loading_group:
-            self.metrics.load(MetricSet(), self.objects.kind.currentText())
+    def change_scope(self):
+        self.metrics.load(MetricSet(), self.objects.value().resource_kind)
+        self.objects.clear_preview()
 
     def invalidate_catalogue(self):
         # Keep deliberate metric choices but discard unselected definitions from the old server.
-        self.metrics.load(self.metrics.value(), self.objects.kind.currentText())
-        self.objects.matches.clear()
+        self.metrics.load(self.metrics.value(), self.objects.value().resource_kind)
+        self.objects.clear_preview()
 
     def snapshot(self):
         self.store_group()
@@ -236,7 +226,7 @@ class MainWindow(QMainWindow):
         self.task.start()
 
     def failed(self, page, message):
-        page.status.setText(f"Error: {message}")
+        page.set_status(f"Error: {message}")
         if page is self.run_page:
             page.progress.setRange(0, 1)
             page.progress.setValue(0)
@@ -264,21 +254,15 @@ class MainWindow(QMainWindow):
         self.connection.set_sources(sources)
         self.connection.status.setText("Login sources loaded. You can also enter a source name manually.")
 
-    def load_kinds(self):
+    def load_kinds(self, adapter):
         config = self.connection.value(secrets=True)
-        adapter = self.objects.adapter.text().strip() or "VMWARE"
-        self.objects.status.setText("Loading resource kinds…")
+        self.objects.set_status("Loading resource kinds…")
         self.launch(lambda progress, stop: self.client_factory(config).list_resource_kinds(adapter),
-                    self.kinds_loaded, self.objects)
+                    self.objects.set_kinds, self.objects)
 
-    def kinds_loaded(self, kinds):
-        self.objects.set_kinds(kinds)
-        self.objects.status.setText(f"{len(kinds)} resource kinds available.")
-
-    def preview_objects(self):
+    def preview_objects(self, selector):
         config = self.connection.value(secrets=True)
-        selector = self.objects.value()
-        self.objects.status.setText("Loading preview…")
+        self.objects.set_status("Loading preview…")
         self.launch(lambda progress, stop: self.client_factory(config).search_resources(
             selector.resource_kind, name_query=selector.search_query if selector.selection_mode == "search" else None,
             max_resources=200), self.objects.show_matches, self.objects)
@@ -286,7 +270,7 @@ class MainWindow(QMainWindow):
     def load_metrics(self):
         config = self.connection.value(secrets=True)
         selector = self.objects.value()
-        self.metrics.status.setText("Loading catalogue…")
+        self.metrics.set_status("Loading catalogue…")
         self.launch(lambda progress, stop: self.client_factory(config).get_stat_keys(selector.adapter_kind, selector.resource_kind),
                     self.metrics_loaded, self.metrics)
 
@@ -294,7 +278,7 @@ class MainWindow(QMainWindow):
         if catalogue:
             self.metrics.set_catalogue(catalogue)
         else:
-            self.metrics.status.setText("No catalogue returned. Check the connection, adapter, and kind; manual keys remain available.")
+            self.metrics.set_status("No catalogue returned. Check the connection, adapter, and kind; manual keys remain available.")
 
     def load_profile_path(self, path):
         job, warnings = load_profile(str(path))

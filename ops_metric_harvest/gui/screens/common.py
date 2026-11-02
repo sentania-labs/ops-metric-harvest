@@ -39,6 +39,9 @@ class Page(QWidget):
         self.layout.addWidget(self.status)
         self.layout.addStretch()
 
+    def set_status(self, text):
+        self.status.setText(text)
+
 
 class PathPicker(QWidget):
     def __init__(self, title, directory=False, file_filter="All files (*)"):

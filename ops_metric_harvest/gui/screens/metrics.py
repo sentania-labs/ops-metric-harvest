@@ -1,5 +1,9 @@
-"""Metric catalogue and selection screen, independent of the shell."""
-from PySide6.QtCore import Qt
+"""Metric selection screen. The shell uses only this contract, so the screen can be replaced.
+
+Methods: load(metric_set, kind), value() -> MetricSet, set_catalogue(catalogue), set_status(text).
+Signals: catalogueRequested.
+"""
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLineEdit, QListWidget, QListWidgetItem, QPushButton
 from ops_metric_harvest.models import MetricSet
 from ops_metric_harvest.starter_metrics import STARTER_METRIC_SETS
@@ -7,6 +11,8 @@ from .common import Page
 
 
 class MetricsPage(Page):
+    catalogueRequested = Signal()
+
     def __init__(self):
         super().__init__("Select metrics", "Filter the catalogue and check metrics for the current group. Selected metrics remain selected when filtered.")
         self.filter = QLineEdit()
@@ -27,6 +33,7 @@ class MetricsPage(Page):
         self.starters.clicked.connect(self.select_starters)
         self.add.clicked.connect(self.add_manual)
         self.list.itemChanged.connect(self.update_count)
+        self.refresh.clicked.connect(self.catalogueRequested)
 
     def value(self):
         keys = [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())

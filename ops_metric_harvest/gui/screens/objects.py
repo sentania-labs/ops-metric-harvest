@@ -1,4 +1,10 @@
-"""Object selection boundary. Replace this screen without changing collection or shell."""
+"""Object selection screen. The shell uses only this contract, so the screen can be replaced.
+
+Methods: load(group), value() -> ObjectSelector, group_name(), set_kinds(kinds),
+show_matches(resources), clear_preview(), set_status(text).
+Signals: scopeChanged (committed adapter or resource kind change),
+kindsRequested(adapter_kind), previewRequested(selector).
+"""
 from copy import deepcopy
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QPushButton
@@ -8,7 +14,9 @@ from .common import Page, PathPicker, combo
 
 
 class ObjectsPage(Page):
-    kind_changed = Signal(str)
+    scopeChanged = Signal()
+    kindsRequested = Signal(str)
+    previewRequested = Signal(object)
 
     def __init__(self):
         super().__init__("Select objects", "Configure the current collection group. CSV accepts object names or resource IDs, with an optional resource kind column.")
@@ -34,10 +42,32 @@ class ObjectsPage(Page):
                               ("", self.preview), ("Preview:", self.matches)]:
             self.form.addRow(label, widget)
         self._selector = ObjectSelector("VirtualMachine")
+        self._loading = False
+        self._scope = self._current_scope()
         self.mode.currentIndexChanged.connect(self.update_fields)
-        self.kind.currentTextChanged.connect(self.kind_changed)
+        self.kind.currentIndexChanged.connect(self.commit_scope)
+        self.kind.lineEdit().editingFinished.connect(self.commit_scope)
+        self.adapter.editingFinished.connect(self.commit_scope)
+        self.refresh.clicked.connect(lambda: self.kindsRequested.emit(self.value().adapter_kind))
+        self.preview.clicked.connect(lambda: self.previewRequested.emit(self.value()))
         self.csv.edit.textChanged.connect(self.clear_embedded_csv)
         self.update_fields()
+
+    def _current_scope(self):
+        return (self.adapter.text().strip() or "VMWARE", self.kind.currentText().strip())
+
+    def commit_scope(self):
+        scope = self._current_scope()
+        if not self._loading and scope != self._scope:
+            self._scope = scope
+            self.scopeChanged.emit()
+
+    def group_name(self):
+        return self.name.text().strip()
+
+    def clear_preview(self):
+        self.matches.clear()
+        self.status.clear()
 
     def clear_embedded_csv(self):
         self._selector.csv_content = None
@@ -61,6 +91,7 @@ class ObjectsPage(Page):
         return selector
 
     def load(self, group):
+        self._loading = True
         self.name.setText(group.name)
         self.kind.setCurrentText(group.resource_kind)
         self.adapter.setText(group.selector.adapter_kind or "VMWARE")
@@ -72,6 +103,8 @@ class ObjectsPage(Page):
         self.ids.setPlainText("\n".join(group.selector.resource_ids))
         self.matches.clear()
         self.status.setText("Embedded CSV loaded from profile." if group.selector.csv_content else "")
+        self._scope = self._current_scope()
+        self._loading = False
 
     def set_kinds(self, kinds):
         current = self.kind.currentText()
@@ -80,6 +113,7 @@ class ObjectsPage(Page):
         self.kind.addItems(list(dict.fromkeys([*DEFAULT_RESOURCE_KINDS, *kinds])))
         self.kind.setCurrentText(current)
         self.kind.blockSignals(False)
+        self.status.setText(f"{len(kinds)} resource kinds available.")
 
     def show_matches(self, resources):
         self.matches.setPlainText("\n".join(f"{r['name']}   {r['resourceId']}" for r in resources))
