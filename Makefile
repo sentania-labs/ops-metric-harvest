@@ -1,15 +1,23 @@
-.PHONY: lint test check build-linux clean
+.PHONY: lint test check build-linux build-windows gui smoke-gui clean
+
+PYTHON ?= python3
 
 lint:
-	ruff check ops_metric_harvest tests
+	$(PYTHON) -m ruff check ops_metric_harvest tests
 
 test:
-	pytest -v
+	QT_QPA_PLATFORM=offscreen $(PYTHON) -m pytest -v
 
 check: lint test
 
-build-linux:
-	python3 -m PyInstaller --clean --noconfirm packaging/ops-metric-harvest.spec
+gui:
+	$(PYTHON) -m ops_metric_harvest.cli gui
+
+smoke-gui:
+	xvfb-run -a $(PYTHON) -m ops_metric_harvest.cli gui --screenshot "$${GUI_SCREENSHOT:-/tmp/omh-connection.png}"
+
+build-linux build-windows:
+	$(PYTHON) packaging/build.py
 
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache *.egg-info

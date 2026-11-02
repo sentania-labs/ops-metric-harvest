@@ -45,6 +45,7 @@ def get_client(
     insecure: bool = False,
     timeout: int = 120,
     quiet: bool = False,
+    ca_bundle: Optional[str] = None,
 ) -> OpsClient:
     if not server or not str(server).strip():
         eprint("Error: VCF Operations server address is required. Use --server or specify in profile.")
@@ -53,7 +54,11 @@ def get_client(
     tok = token or os.environ.get("VCFOPS_TOKEN")
     verify = not insecure
 
-    client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout)
+    try:
+        client = OpsClient(server=server, token=tok, verify=verify, timeout=timeout, ca_bundle=ca_bundle)
+    except OSError as e:
+        eprint(f"Error: could not load trusted CA bundle '{ca_bundle}': {e}")
+        sys.exit(1)
 
     if not tok:
         username = user or os.environ.get("VCFOPS_USER")
@@ -409,6 +414,7 @@ def cmd_profiles_run(args: argparse.Namespace) -> int:
         auth_source=args.auth_source or job.connection.get("auth_source"),
         insecure=insecure,
         quiet=args.quiet,
+        ca_bundle=job.connection.get("ca_bundle") or None,
     )
 
     formats = [f.strip() for f in args.format.split(",") if f.strip()] if args.format else job.export_config.get("formats", ["csv", "xlsx"])
@@ -429,13 +435,9 @@ def cmd_profiles_run(args: argparse.Namespace) -> int:
 
 
 def cmd_gui(args: argparse.Namespace) -> int:
-    """Launch the localhost browser GUI."""
-    from ops_metric_harvest.gui.server import run_gui_server
-    return run_gui_server(
-        host=args.host,
-        port=args.port,
-        open_browser=not args.no_browser,
-    )
+    """Launch the native Qt desktop application."""
+    from ops_metric_harvest.gui.app import run_gui
+    return run_gui(theme=args.theme, screenshot=args.screenshot)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -528,10 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect.set_defaults(func=cmd_collect)
 
     # 6. gui
-    p_gui = subparsers.add_parser("gui", help="Launch the browser-based query builder GUI")
-    p_gui.add_argument("--host", default="127.0.0.1", help="Loopback host to bind (default: 127.0.0.1)")
-    p_gui.add_argument("--port", type=int, default=0, help="Port to bind (default: 0 for random free port)")
-    p_gui.add_argument("--no-browser", action="store_true", help="Do not automatically open the default web browser")
+    p_gui = subparsers.add_parser("gui", help="Launch the native desktop application")
+    p_gui.add_argument("--theme", choices=["light", "dark"], default="light", help="Lattice theme (default: light)")
+    p_gui.add_argument("--screenshot", metavar="PNG", help="Capture the connection screen and exit (headless smoke)")
     p_gui.set_defaults(func=cmd_gui)
 
     return parser
@@ -542,8 +543,8 @@ def main() -> None:
     parser = build_parser()
     # Default to GUI if no arguments provided
     if len(sys.argv) == 1:
-        from ops_metric_harvest.gui.server import run_gui_server
-        sys.exit(run_gui_server(host="127.0.0.1", port=0, open_browser=True))
+        from ops_metric_harvest.gui.app import run_gui
+        sys.exit(run_gui())
 
     args = parser.parse_args()
     if hasattr(args, "func"):

@@ -2,7 +2,7 @@
 
 ## Architecture
 
-`ops-metric-harvest` is packaged as a standalone executable with zero external runtime dependencies using PyInstaller.
+`ops-metric-harvest` is packaged as a standalone executable using PyInstaller onefile, bundling Python, PySide6, Qt platform/image plugins, and the Lattice theme assets. Linux still needs the host graphical libraries described below.
 
 Users on Windows, macOS, and Linux do not need Python, PowerShell, Node.js, or any package managers installed to run the application.
 
@@ -17,6 +17,7 @@ Users on Windows, macOS, and Linux do not need Python, PowerShell, Node.js, or a
 To build a standalone executable on the current host:
 
 ```bash
+python3 -m pip install -e ".[yaml]" pyinstaller
 python3 packaging/build.py
 ```
 
@@ -24,6 +25,20 @@ Outputs are placed in `dist/`:
 - `dist/ops-metric-harvest` (or `.exe` on Windows)
 - `dist/ops-metric-harvest.sha256`
 - `dist/manifest-<platform>-<arch>.json`
+
+## Native UI assets and smoke
+
+The spec resolves paths from its own directory, so the Makefile and `packaging/build.py` use the same build on Windows and the existing Linux/macOS targets. `make build-windows PYTHON=python` builds the Windows onefile executable on Windows. PyInstaller's QtWidgets/QtGui hooks collect platform plugins; package data includes both QSS files and the palette JSON. QtWebEngine is not included. The executable retains console support for CLI commands. Native launches hide a console created for the executable itself, while leaving an existing caller terminal visible.
+
+Vendored Lattice distribution: `sentania-labs/lattice` commit `cc4804b7da1e03875fa7452864601fd75de2be0d`. Assets are copied unchanged from `dist/` to `ops_metric_harvest/gui/assets/`. The app uses Fusion and reapplies QPalette and QSS together when changing themes.
+
+On Linux, install `xvfb`, `libegl1`, `libopengl0`, `libxcb-cursor0`, and `libxkbcommon-x11-0` for the Xvfb smoke. Run:
+
+```bash
+xvfb-run -a ./dist/ops-metric-harvest gui --screenshot /tmp/connection.png
+```
+
+On Windows, run `dist\ops-metric-harvest.exe gui --screenshot connection.png`. CI captures the native connection screen for each existing build target, including an Xvfb launch on Linux. The screenshot option exits after rendering and needs no server credentials.
 
 ## Production signing requirements
 

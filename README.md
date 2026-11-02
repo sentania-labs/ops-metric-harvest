@@ -2,7 +2,7 @@
 
 VCF Operations Metrics Explorer is a lightweight, cross-platform utility that connects to VMware Cloud Foundation Operations (formerly Aria Operations / vRealize Operations) to discover inventory objects, select performance metrics, execute multi-group historical collection jobs, and export aligned results to CSV, Excel (.xlsx), and JSON.
 
-The application includes both a localhost browser GUI and a fully scriptable CLI backed by the same collection engine. It packages into a single standalone executable on Windows, macOS, and Linux without requiring users to install Python or other runtime runtimes.
+The application includes a native PySide6 Qt Widgets desktop app styled with Lattice and a fully scriptable CLI backed by the same collection engine. It packages into a single standalone executable on Windows, macOS, and Linux without requiring users to install Python or other runtimes.
 
 ---
 
@@ -13,7 +13,7 @@ The application includes both a localhost browser GUI and a fully scriptable CLI
 Download the precompiled release binary for your platform from GitHub Releases, or build locally:
 
 ```bash
-# Launch the graphical query builder in your browser
+# Launch the native desktop application
 ./ops-metric-harvest gui
 
 # Or run headless collection directly from the CLI
@@ -29,11 +29,14 @@ Python 3.9 or newer is supported:
 git clone https://github.com/sentania-labs/ops-metric-harvest.git
 cd ops-metric-harvest
 
-# Launch the browser GUI (default action when run without arguments)
+# Install the desktop application and development dependencies
+python3 -m pip install -e ".[dev]"
+
+# Launch the native app (default action when run without arguments)
 python3 -m ops_metric_harvest.cli
 
 # Run automated tests
-pytest -v
+QT_QPA_PLATFORM=offscreen python3 -m pytest -v
 ```
 
 ---
@@ -105,21 +108,24 @@ The CLI separates structured data on stdout from operational progress on stderr,
 
 ---
 
-## Browser GUI
+## Native desktop app
 
-Run `./ops-metric-harvest gui` (or launch the executable directly). The local browser opens automatically to `http://127.0.0.1:<port>`.
+Run `ops-metric-harvest gui`, or double-click the standalone executable. The app uses Qt Widgets with the shared [Lattice](https://github.com/sentania-labs/lattice) QSS and palette, a light default, and a Light / Dark theme picker. Start in dark mode with `ops-metric-harvest gui --theme dark`.
 
-### Features
-1. **Connection Screen**: Supports username/password with optional auth source, or existing OpsToken. TLS verification is toggled with visible security alerts.
-2. **Multi-Group Builder**: Create independent collection groups. For each group, configure:
-   - Resource kind (`VirtualMachine`, `HostSystem`, `ClusterComputeResource`, `Datastore`).
-   - Object selector (`All`, `Filter by Name`, or `Import CSV`).
-   - Metric picker with starter presets and manual stat key fallback.
-3. **Time Range & Rollup**: Relative ranges (1h to 30d) or exact ISO UTC timestamps, with selectable rollup types (AVG, SUM, MIN, MAX, NONE).
-4. **Preflight Summary**: Verifies selection scope before sending API requests.
-5. **Live Progress & Cancellation**: Real-time progress bar, request log, and instant cancellation.
-6. **Results & Downloads**: Preview table with 200 rows and one-click downloads for long CSV, wide CSV, multi-sheet Excel (.xlsx), and JSON.
-7. **Profile Management**: Save configured jobs to versioned JSON or import existing profiles.
+![Native connection screen in the light Lattice theme](docs/images/native-connection.png)
+
+1. **Connection**: Enter the VCF Operations URL, select username/password or OpsToken, and test the connection. Refresh the login source picker or enter a source manually. Browse for a trusted CA bundle, or explicitly ignore SSL validation with a visible warning.
+2. **Objects**: Add and switch collection groups. Each group has a resource kind, adapter, and All, name filter, CSV import, or explicit name/ID selection. Preview up to 200 matching objects; collection resolves the full selection. Objects and Metrics are separate screen modules so the next live-selection milestone can replace them.
+3. **Metrics**: Load and filter the catalogue, check metrics, select starter metrics, or enter manual stat keys. Filtering keeps checked metrics selected. Changing a group's resource kind or adapter clears that group's metric selection.
+4. **Collection**: Choose a relative duration, absolute UTC range using calendar controls, or latest N samples. Select rollup settings, export timezone, long/wide CSV, Excel, JSON, or text table, and an output folder with a native picker.
+5. **Run**: Review the group scope, start collection, monitor progress, and cancel between requests. Closing during a request waits for that operation to finish. The summary shows objects, samples, warnings, errors, output paths, and a preview of up to 200 samples. Each run writes into a new timestamped subfolder, avoiding overwriting earlier exports. Export failures leave the result preview available.
+6. **Profiles**: Load and save schema-versioned JSON profiles shared with the CLI, including multiple groups. Profiles exclude passwords and tokens. Loading a profile clears current credentials.
+
+![Native collection settings in the dark Lattice theme](docs/images/native-collection-dark.png)
+
+The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. The CLI commands and collection engine retain their existing behavior. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
+
+For development, `make smoke-gui` launches under Xvfb, captures the connection screen, and exits. Set `GUI_SCREENSHOT` to choose the PNG path. CI also launches the packaged executable and retains its screenshots as artifacts.
 
 ---
 
@@ -180,9 +186,8 @@ Pre-built profiles covering the three primary operational scenarios are included
 ## Operational & Security Considerations
 
 - **Blast Radius**: `ops-metric-harvest` is read-only against the VCF Operations Suite API. It creates no objects, alters no configurations, and issues only GET requests for inventory and metric data.
-- **Loopback Binding**: The web GUI binds strictly to `127.0.0.1` and generates a cryptographically random session token on startup. Remote hosts cannot connect to the GUI.
-- **CSRF Protection**: State-changing API endpoints require the matching session token in the `X-Session` header.
-- **Secrets Handling**: Authentication credentials and tokens are kept in memory only during collection and are immediately discarded. Profile files and export outputs strictly strip and redact credentials.
+- **Native UI**: No listener or browser session is created. The desktop connects directly to the Operations API over HTTPS.
+- **Secrets Handling**: Authentication credentials stay in process memory until cleared, replaced by a loaded profile, or the app closes. Profiles exclude passwords and tokens; task errors and progress redact supplied runtime credentials.
 - **Formula Injection Defense**: All CSV and Excel string cells beginning with `=`, `+`, `-`, `@`, `\t`, or `\r` are prefixed with a single quote to prevent code execution when opened in spreadsheet software.
 - **Resource Exhaustion Prevention**: Historical queries are automatically chunked into batches of up to 40 resources to avoid HTTP 414 URL length errors and proxy buffer limits.
 

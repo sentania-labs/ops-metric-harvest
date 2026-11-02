@@ -127,9 +127,11 @@ Provide:
 
 The GUI must be usable without requiring the user to install Python, PowerShell, Node.js, or another language runtime.
 
-A localhost browser GUI is acceptable for the MVP if the application starts it automatically and packages all required components.
+The GUI is a native desktop application built on PySide6 and the shared Lattice design system, matching Telegraf Helper and vcf-cf-migrator. The localhost browser GUI is retired.
 
-The localhost service must be bound to loopback, protected against cross-origin requests, and shut down when the application exits.
+The native GUI must package all required components and run no local network service.
+
+*2026-11: Direction changed from a localhost browser GUI to a native PySide6/Lattice desktop GUI.*
 
 **R9. CLI**
 Provide script-friendly subcommands:
@@ -248,8 +250,7 @@ Retry transient failures with bounded exponential backoff and jitter, respecting
 - Default to trusted TLS verification.
 - Never write secrets to application logs, history, profiles, or exports.
 - Redact authentication headers and credentials from errors.
-- Restrict any local web interface to loopback.
-- Protect local state-changing requests from cross-origin attacks.
+- Run no local web interface; the native GUI opens no listening port.
 - Avoid loading remote HTML or scripts into a privileged context.
 - Limit request concurrency and memory usage.
 - Apply output size and sample-count preflight estimates.
@@ -325,7 +326,7 @@ Reuse proven logic where compatible, but separate the domain model, API client, 
 
 Assess PyInstaller or comparable packaging tools against the native-signing and notarization requirements before committing to distribution.
 
-Avoid adding a large desktop framework unless necessary. Prefer a lightweight localhost web interface served by the packaged application.
+Build the GUI as a native desktop application on PySide6 and the shared Lattice design system, matching Telegraf Helper and vcf-cf-migrator. The localhost web interface is retired (2026-11).
 
 ### 10. Definition of done
 
