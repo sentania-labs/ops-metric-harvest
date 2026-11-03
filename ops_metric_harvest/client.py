@@ -212,77 +212,78 @@ class OpsClient:
         data = self._request("GET", "/auth/sources")
         return [source["name"] for source in data.get("sources", []) if source.get("name")]
 
-    def list_resource_kinds(self, adapter_kind: str = "VMWARE") -> List[str]:
-        """Discover resource kinds supported by the server."""
-        try:
-            path = f"/adapterkinds/{urllib.parse.quote(adapter_kind, safe='')}/resourcekinds"
-            data = self._request("GET", path, params={"_no_links": "true"})
-            kinds = []
-            for item in data.get("resourceKind", []) or []:
-                k = item.get("resourceKindKey") or item.get("key")
-                if k:
-                    kinds.append(k)
-            if kinds:
-                return sorted(kinds)
-        except Exception as e:
-            logger.debug("Failed to list resource kinds from adapter: %s", e)
+    def list_adapter_kinds(self):
+        data = self._request("GET", "/adapterkinds", params={"_no_links": "true"})
+        return sorted(item["key"] for item in data.get("adapter-kind", []) if item.get("key"))
 
-        # Fallback to common standard resource kinds
-        return ["ClusterComputeResource", "Datastore", "HostSystem", "VirtualMachine"]
+    def list_resource_kinds(self, adapter_kind="VMWARE"):
+        path = f"/adapterkinds/{urllib.parse.quote(adapter_kind, safe='')}/resourcekinds"
+        data = self._request("GET", path, params={"_no_links": "true"})
+        return sorted(item.get("resourceKindKey") or item["key"]
+                      for item in data.get("resourceKind", []) if item.get("resourceKindKey") or item.get("key"))
 
-    def search_resources(
-        self,
-        resource_kind: str,
-        name_query: Optional[str] = None,
-        page_size: int = 1000,
-        max_resources: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Paginated resource discovery for a specific resource kind."""
-        resources: List[Dict[str, Any]] = []
+    @staticmethod
+    def _resource_page(data, page, page_size):
+        resources = []
+        for res in data.get("resourceList", []) or []:
+            key = res.get("resourceKey", {})
+            if res.get("identifier"):
+                resources.append({"resourceId": res["identifier"], "name": key.get("name") or res["identifier"],
+                                  "adapterKind": key.get("adapterKindKey"), "resourceKind": key.get("resourceKindKey")})
+        info = data.get("pageInfo", {})
+        total = info.get("totalCount")
+        total = total if isinstance(total, int) and total >= 0 else None
+        size = info.get("pageSize") or page_size
+        return {"resources": resources, "page": page, "page_size": size, "total": total,
+                "has_next": bool(resources) and ((page + 1) * size < total if total is not None else len(resources) >= size)}
+
+    def resource_page(self, resource_kind, adapter_kind="VMWARE", name_query=None, page=0, page_size=50,
+                      resource_ids=None):
+        """One server page. Counts refer to the server filter, never a local subset."""
+        params = {"resourceKind": resource_kind, "adapterKind": adapter_kind,
+                  "page": page, "pageSize": page_size, "_no_links": "true"}
+        if name_query:
+            params["regex"] = "(?iu).*" + re.escape(name_query) + ".*"
+        if resource_ids:
+            params["resourceId"] = resource_ids
+        return self._resource_page(self._request("GET", "/resources", params=params), page, page_size)
+
+    def relationship_page(self, resource_id, relationship, page=0, page_size=50):
+        if relationship not in ("PARENT", "CHILD"):
+            raise ValueError("Relationship must be PARENT or CHILD")
+        path = f"/resources/{urllib.parse.quote(resource_id, safe='')}/relationships"
+        data = self._request("GET", path, params={"relationshipType": relationship, "page": page,
+                                                 "pageSize": page_size, "_no_links": "true"})
+        return self._resource_page(data, page, page_size)
+
+    def search_resources(self, resource_kind, name_query=None, page_size=1000, max_resources=None,
+                         adapter_kind="VMWARE", resource_ids=None, should_stop=None):
+        resources = []
         page = 0
-
-        while True:
-            params: Dict[str, Any] = {
-                "resourceKind": resource_kind,
-                "page": page,
-                "pageSize": page_size,
-                "_no_links": "true",
-            }
-            if name_query:
-                params["name"] = name_query
-
-            data = self._request("GET", "/resources", params=params)
-            batch = data.get("resourceList", []) or []
-
-            for res in batch:
-                identifier = res.get("identifier")
-                res_key = res.get("resourceKey", {})
-                name = res_key.get("name") or identifier
-                adapter_kind = res_key.get("adapterKindKey")
-                res_kind_key = res_key.get("resourceKindKey") or resource_kind
-
-                # Filter client-side if name_query provided (in case API doesn't filter exactly)
-                if name_query and name_query.lower() not in name.lower():
-                    continue
-
-                resources.append({
-                    "resourceId": identifier,
-                    "name": name,
-                    "adapterKind": adapter_kind,
-                    "resourceKind": res_kind_key,
-                })
-
-                if max_resources and len(resources) >= max_resources:
-                    return resources
-
-            page_info = data.get("pageInfo", {})
-            total_count = page_info.get("totalCount", len(resources))
-
-            page += 1
-            if len(resources) >= total_count or not batch:
+        while not should_stop or not should_stop():
+            result = self.resource_page(resource_kind, adapter_kind, name_query, page,
+                                        min(page_size, max_resources) if max_resources else page_size, resource_ids)
+            resources.extend(result["resources"])
+            if max_resources and len(resources) >= max_resources:
+                return resources[:max_resources]
+            if not result["has_next"]:
                 break
-
+            page += 1
         return resources
+
+    def get_property_keys(self, adapter_kind, resource_kind):
+        path = (f"/adapterkinds/{urllib.parse.quote(adapter_kind, safe='')}"
+                f"/resourcekinds/{urllib.parse.quote(resource_kind, safe='')}/properties")
+        data = self._request("GET", path, params={"_no_links": "true"})
+        return {item["key"]: {"name": item.get("name") or item["key"], "unit": item.get("unit") or "",
+                              "description": item.get("description") or "", "data_type": item.get("dataType") or ""}
+                for item in data.get("resourceTypeAttributes", []) if item.get("key")}
+
+    def get_resource_properties(self, resource_id):
+        """Latest string values. This endpoint supplies no source timestamp."""
+        path = f"/resources/{urllib.parse.quote(resource_id, safe='')}/properties"
+        data = self._request("GET", path, params={"_no_links": "true"})
+        return {item["name"]: item.get("value") for item in data.get("property", []) if item.get("name")}
 
     def get_stat_keys(self, adapter_kind: str, resource_kind: str) -> Dict[str, Dict[str, str]]:
         """Retrieve metric catalogue for an adapter and resource kind."""

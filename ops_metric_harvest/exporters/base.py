@@ -46,17 +46,20 @@ def to_wide_rows(
     if not samples:
         return [], []
 
+    def field_key(sample):
+        return (sample.field_type, sample.metric_key)
+
     # Collect distinct metric keys preserving first-seen order
     metric_keys: List[str] = []
     metric_labels: Dict[str, str] = {}
     for s in samples:
-        if s.metric_key not in metric_keys:
-            metric_keys.append(s.metric_key)
+        if field_key(s) not in metric_keys:
+            metric_keys.append(field_key(s))
             if s.metric_name and s.metric_name != s.metric_key:
                 lbl = f"{s.metric_key} | {s.metric_name} ({s.unit})" if s.unit else f"{s.metric_key} | {s.metric_name}"
             else:
                 lbl = f"{s.metric_key} ({s.unit})" if s.unit else s.metric_key
-            metric_labels[s.metric_key] = lbl
+            metric_labels[field_key(s)] = ("Property (latest, collected at): " if s.field_type == "property" else "") + lbl
 
     headers = [
         "Group",
@@ -68,17 +71,35 @@ def to_wide_rows(
         *[metric_labels[k] for k in metric_keys],
     ]
 
-    # Group samples by (group_id, resource_id, timestamp_ms)
+    # Metric samples define rows; latest property values repeat on every metric row of the same object.
     row_map: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
     row_meta: Dict[Tuple[str, str, int], Tuple[str, str, str, str, str, str]] = {}
+    object_properties: Dict[Tuple[str, str], Dict[Any, Any]] = {}
+    property_rows: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
+    property_meta: Dict[Tuple[str, str, int], Tuple[str, str, str, str, str, str]] = {}
+    metric_objects = set()
 
     for s in samples:
+        object_key = (s.group_id, s.resource_id)
         key = (s.group_id, s.resource_id, s.timestamp_ms)
-        if key not in row_map:
-            row_map[key] = {}
+        if s.field_type == "property":
+            object_properties.setdefault(object_key, {})[field_key(s)] = s.value
+            target_map, target_meta = property_rows, property_meta
+        else:
+            metric_objects.add(object_key)
+            target_map, target_meta = row_map, row_meta
+        if key not in target_map:
+            target_map[key] = {}
             loc_time = format_local_time(s.timestamp_ms, tz_name)
-            row_meta[key] = (s.group_name, s.resource_kind, s.resource_name, s.resource_id, s.time_utc, loc_time)
-        row_map[key][s.metric_key] = s.value
+            target_meta[key] = (s.group_name, s.resource_kind, s.resource_name, s.resource_id, s.time_utc, loc_time)
+        target_map[key][field_key(s)] = s.value
+
+    for key, values in row_map.items():
+        values.update(object_properties.get(key[:2], {}))
+    for key, values in property_rows.items():
+        if key[:2] not in metric_objects:
+            row_map[key] = values
+            row_meta[key] = property_meta[key]
 
     # Build rows sorted by group_name, resource_name, timestamp_ms
     sorted_keys = sorted(row_map.keys(), key=lambda k: (row_meta[k][0], row_meta[k][2], k[2]))

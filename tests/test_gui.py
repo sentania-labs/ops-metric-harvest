@@ -24,12 +24,16 @@ def window(qtbot):
     client = Mock()
     client.test_connection.return_value = {"status": "ok"}
     client.list_auth_sources.return_value = ["AD", "Local"]
-    client.list_resource_kinds.return_value = ["CustomKind"]
+    client.list_resource_kinds.return_value = ["CustomKind", "HostSystem", "VirtualMachine"]
+    client.list_adapter_kinds.return_value = ["VMWARE"]
+    client.get_property_keys.return_value = {}
+    client.resource_page.return_value = {"resources": [{"name": "vm-a", "resourceId": "id-a", "adapterKind": "VMWARE", "resourceKind": "VirtualMachine"}], "page": 0, "total": 1, "has_next": False}
     client.search_resources.return_value = [{"name": "vm-a", "resourceId": "id-a"}]
     client.get_stat_keys.return_value = {"cpu|test": {"name": "CPU test", "unit": "%"}}
     factory = Mock(return_value=client)
     widget = MainWindow(client_factory=factory)
     qtbot.addWidget(widget)
+    widget.objects.set_kinds({"adapters": ["VMWARE"], "kinds": ["HostSystem", "VirtualMachine"]})
     widget.show()
     return widget
 
@@ -128,16 +132,13 @@ def test_objects_modes_and_embedded_csv(qtbot):
     assert page.value().csv_content == "Name\nvm-a\n"
     page.csv.edit.setText("/tmp/new.csv")
     assert page.value().csv_content is None
-    page.mode.setCurrentIndex(1)
+    page.dynamic.setChecked(True)
     page.query.setText("db")
     assert page.value().selection_mode == "search"
     assert page.value().search_query == "db"
-    page.mode.setCurrentIndex(3)
-    page.names.setPlainText(" vm-a \n\nvm-b")
-    page.ids.setPlainText("id-c")
-    assert page.value().names == ["vm-a", "vm-b"]
-    assert page.value().resource_ids == ["id-c"]
-    assert not page.preview.isEnabled()
+    page.clear_selection()
+    assert page.value().resource_ids == []
+    assert page.value().selection_mode == "explicit"
 
 
 def test_objects_discovery(window, qtbot):
@@ -145,12 +146,12 @@ def test_objects_discovery(window, qtbot):
     window.objects.refresh.click()
     wait_task(qtbot, window)
     assert window.objects.kind.findText("CustomKind") >= 0
-    window.objects.mode.setCurrentIndex(1)
+    window.objects.dynamic.setChecked(True)
     window.objects.query.setText("vm")
     window.objects.preview.click()
     wait_task(qtbot, window)
-    assert "vm-a" in window.objects.matches.toPlainText()
-    window.client_factory.return_value.search_resources.assert_called_once_with("VirtualMachine", name_query="vm", max_resources=200)
+    assert window.objects.matches.item(0, 0).text() == "vm-a"
+    window.client_factory.return_value.resource_page.assert_called_once_with("VirtualMachine", "VMWARE", "vm", 0)
 
 
 def test_metric_filter_preserves_checked_keys(qtbot):
@@ -161,7 +162,7 @@ def test_metric_filter_preserves_checked_keys(qtbot):
     page.filter.setText("Memory")
     assert page.list.item(0).isHidden()
     assert page.value().stat_keys == ["cpu|usage"]
-    page.list.item(1).setCheckState(Qt.Checked)
+    page.list.item(3).setCheckState(Qt.Checked)
     page.manual.setText("extra|metric, extra|metric")
     page.add.click()
     assert page.value().stat_keys == ["cpu|usage", "extra|metric", "mem|usage"]
@@ -172,20 +173,22 @@ def test_metric_catalogue_and_kind_reset(window, qtbot):
     window.metrics.refresh.click()
     wait_task(qtbot, window)
     assert "cpu|test" in window.metrics.catalogue
-    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
+    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.commit_scope()
     assert not window.metrics.value().stat_keys
     assert window.metrics.kind == "HostSystem"
 
 
 def test_typing_scope_keeps_metrics_until_committed(window, qtbot):
+    window.metrics.select_starters()
     selected = window.metrics.value().stat_keys
     assert selected
-    window.objects.adapter.setText("VMWAR")
+    window.objects.adapter.setCurrentText("VMWAR")
     window.objects.kind.lineEdit().setText("Host")
     assert window.metrics.value().stat_keys == selected
-    window.objects.adapter.setText("VMWARE")
+    window.objects.adapter.setCurrentText("VMWARE")
     window.objects.kind.lineEdit().setText("VirtualMachine")
-    window.objects.adapter.editingFinished.emit()
+    window.objects.adapter.lineEdit().editingFinished.emit()
     assert window.metrics.value().stat_keys == selected
     window.objects.kind.lineEdit().setText("HostSystem")
     assert window.metrics.value().stat_keys == selected
@@ -215,11 +218,13 @@ def test_collection_modes_and_native_picker(qtbot, tmp_path):
 
 def test_group_switch_and_profile_round_trip(window, qtbot, tmp_path):
     window.objects.name.setText("First")
+    window.objects.dynamic.setChecked(True)
+    window.metrics.select_starters()
     first_keys = window.metrics.value().stat_keys
     window.add_group()
     window.objects.name.setText("Second")
-    window.objects.mode.setCurrentIndex(3)
-    window.objects.names.setPlainText("vm-a\nvm-b")
+    window.objects.selected = {"id-a": "vm-a", "id-b": "vm-b"}
+    window.metrics.select_starters()
     window.group_picker.setCurrentIndex(0)
     assert window.objects.name.text() == "First"
     assert window.metrics.value().stat_keys == first_keys
@@ -227,14 +232,14 @@ def test_group_switch_and_profile_round_trip(window, qtbot, tmp_path):
     path = tmp_path / "profile.json"
     window.save_profile_path(path)
     data = json.loads(path.read_text())
-    assert data["schema_version"] == "1.0"
+    assert data["schema_version"] == "2.0"
     assert len(data["groups"]) == 2
     assert "password" not in data["connection"]
     window.load_profile_path(path)
     assert window.connection.password.text() == ""
     assert window.snapshot().to_dict() == data
     window.group_picker.setCurrentIndex(1)
-    assert window.objects.value().names == ["vm-a", "vm-b"]
+    assert window.objects.value().resource_ids == ["id-a", "id-b"]
     window.remove_group()
     assert len(window.job.groups) == 1
 
@@ -273,8 +278,10 @@ def test_preflight_rejects_missing_metrics(window):
 def test_collection_background_exports_and_preview(window, qtbot, tmp_path, mock_client):
     window.client_factory = Mock(return_value=mock_client)
     # The all-VM fixture intentionally returns only unrelated misalignment keys.
-    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
+    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.commit_scope()
     window.metrics.select_starters()
+    window.objects.dynamic.setChecked(True)
     window.collection.output.edit.setText(str(tmp_path))
     for check in window.collection.formats.values():
         check.setChecked(True)
@@ -317,6 +324,8 @@ def test_theme_switch_updates_palette(window, qapp):
 
 
 def test_engine_cancellation_returns_cancelled_summary(window, qtbot, tmp_path, mock_client):
+    window.metrics.select_starters()
+    window.objects.dynamic.setChecked(True)
     entered, release = Event(), Event()
     original_search = mock_client.search_resources
     def delayed_search(*args, **kwargs):
@@ -339,8 +348,10 @@ def test_engine_cancellation_returns_cancelled_summary(window, qtbot, tmp_path, 
 
 def test_export_failure_keeps_results(window, qtbot, tmp_path, mock_client):
     window.client_factory = Mock(return_value=mock_client)
-    window.objects.kind.setCurrentIndex(window.objects.kind.findText("HostSystem"))
+    window.objects.kind.setCurrentText("HostSystem")
+    window.objects.commit_scope()
     window.metrics.select_starters()
+    window.objects.dynamic.setChecked(True)
     destination = tmp_path / "not-a-directory"
     destination.write_text("keep")
     window.collection.output.edit.setText(str(destination))
@@ -362,3 +373,51 @@ def test_gui_command_smoke_exits_cleanly(tmp_path):
                             env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr.decode()
     assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("mode", ["all", "search", "explicit"])
+def test_non_imported_stale_csv_path_does_not_block_run(window, tmp_path, mode):
+    window.metrics.select_starters()
+    job = window.snapshot()
+    job.groups[0].selector = ObjectSelector(
+        "VirtualMachine", mode, search_query="vm", resource_ids=["id-a"],
+        csv_path=str(tmp_path / "missing.csv"))
+    window.validate(job, for_run=True)
+
+
+@pytest.mark.parametrize("selection", ["dynamic", "fixed"])
+def test_leaving_imported_selection_clears_stale_csv(window, tmp_path, selection):
+    group = CollectionGroup("Imported", "VirtualMachine",
+                            ObjectSelector("VirtualMachine", "imported", csv_path=str(tmp_path / "missing.csv")),
+                            MetricSet(["cpu|usage"]))
+    window.objects.load(group)
+    window.metrics.load(group.metric_set, group.resource_kind)
+    with pytest.raises(ValueError, match="CSV file does not exist"):
+        window.validate(window.snapshot(), for_run=True)
+    if selection == "dynamic":
+        window.objects.dynamic.setChecked(True)
+        assert window.objects.value().selection_mode == "all"
+        # Returning to fixed selection must not reactivate the old import.
+        window.objects.dynamic.setChecked(False)
+    window.objects.show_matches({"resources": [{"resourceId": "id-a", "name": "vm-a", "adapterKind": "VMWARE",
+                                               "resourceKind": "VirtualMachine"}],
+                                 "page": 0, "total": 1, "has_next": False})
+    window.objects.matches.item(0, 0).setCheckState(Qt.Checked)
+    selector = window.objects.value()
+    assert selector.selection_mode == "explicit"
+    assert selector.resource_ids == ["id-a"]
+    assert selector.csv_path is None and selector.csv_content is None
+    assert window.objects.csv.edit.text() == ""
+    window.validate(window.snapshot(), for_run=True)
+
+
+def test_non_imported_loaded_profile_drops_inactive_csv(window, tmp_path):
+    group = CollectionGroup("Fixed", "VirtualMachine",
+                            ObjectSelector("VirtualMachine", "explicit", resource_ids=["id-a"],
+                                           csv_path=str(tmp_path / "missing.csv"), csv_content="Name\nvm-b"),
+                            MetricSet(["cpu|usage"]))
+    window.objects.load(group)
+    selector = window.objects.value()
+    assert selector.resource_ids == ["id-a"]
+    assert selector.csv_path is None and selector.csv_content is None
+    assert window.objects.csv.edit.text() == ""

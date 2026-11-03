@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import urllib.error
 import urllib.parse
 from unittest.mock import patch
@@ -88,23 +89,27 @@ def mock_urlopen_handler():
         if "/versions" in parsed.path:
             return MockHTTPResponse({"releaseVersion": "8.18.0", "buildNumber": "12345678"})
 
-        # 3. Resources inventory
+        if parsed.path.endswith("/adapterkinds"):
+            return MockHTTPResponse({"adapter-kind": [{"key": "VMWARE"}]})
+        if parsed.path.endswith("/resourcekinds"):
+            return MockHTTPResponse({"resourceKind": [{"key": "HostSystem"}, {"key": "VirtualMachine"}]})
+        # Model server filtering and pagination, including ID filters and regex.
         if parsed.path.endswith("/resources"):
             rk = params.get("resourceKind", [""])[0]
             page = int(params.get("page", ["0"])[0])
-            if rk == "HostSystem":
-                if page == 0:
-                    return MockHTTPResponse(HOSTS_INVENTORY_PAGE_0)
-                elif page == 1:
-                    return MockHTTPResponse(HOSTS_INVENTORY_PAGE_1)
-                else:
-                    return MockHTTPResponse({"pageInfo": {"totalCount": 4, "page": page, "pageSize": 2}, "resourceList": []})
-            elif rk == "VirtualMachine":
-                if params.get("name", [""])[0] == "duplicate-vm":
-                    return MockHTTPResponse(DUPLICATE_NAME_INVENTORY)
-                return MockHTTPResponse(VMS_INVENTORY)
-            else:
-                return MockHTTPResponse({"pageInfo": {"totalCount": 0, "page": 0, "pageSize": 10}, "resourceList": []})
+            size = int(params.get("pageSize", ["1000"])[0])
+            inventory = (HOSTS_INVENTORY_PAGE_0["resourceList"] + HOSTS_INVENTORY_PAGE_1["resourceList"]
+                         if rk == "HostSystem" else VMS_INVENTORY["resourceList"] if rk == "VirtualMachine" else [])
+            pattern = params.get("regex", [""])[0]
+            if "duplicate" in pattern:
+                inventory = DUPLICATE_NAME_INVENTORY["resourceList"]
+            if pattern:
+                inventory = [r for r in inventory if re.fullmatch(pattern, r["resourceKey"]["name"]) is not None]
+            if "resourceId" in params:
+                inventory = [r for r in inventory if r["identifier"] in params["resourceId"]]
+            inventory = [r for r in inventory if r["resourceKey"]["adapterKindKey"] in params.get("adapterKind", ["VMWARE"])]
+            return MockHTTPResponse({"resourceList": inventory[page * size:(page + 1) * size],
+                                     "pageInfo": {"page": page, "pageSize": size, "totalCount": len(inventory)}})
 
         # 4. Stat keys catalogue
         if "/statkeys" in parsed.path:

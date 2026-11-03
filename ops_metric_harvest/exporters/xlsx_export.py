@@ -247,9 +247,11 @@ def export_xlsx(
         f"TimeLocal ({tz_name})",
         "Value",
         "Unit",
+        "FieldType",
+        "TimestampBasis",
     ]
-    long_styles = [0, 0, 0, 0, 0, 0, 0, 0, 3, 0]
-    long_widths = [20, 20, 30, 38, 30, 30, 22, 22, 16, 12]
+    long_styles = [0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0]
+    long_widths = [20, 20, 30, 38, 30, 30, 22, 22, 16, 12, 12, 18]
 
     def long_row_generator():
         for s in result.samples:
@@ -265,6 +267,8 @@ def export_xlsx(
                 loc_time,
                 s.value,
                 s.unit,
+                s.field_type,
+                s.timestamp_basis,
             ]
 
     total_samples = len(result.samples)

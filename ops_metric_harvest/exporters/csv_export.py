@@ -32,6 +32,8 @@ def export_csv_long(
         f"TimeLocal ({tz_name})",
         "Value",
         "Unit",
+        "FieldType",
+        "TimestampBasis",
     ]
 
     dest = stream
@@ -57,8 +59,10 @@ def export_csv_long(
             sanitize_formula_injection(s.metric_name),
             s.time_utc,
             loc_time,
-            val_str,
+            sanitize_formula_injection(val_str),
             sanitize_formula_injection(s.unit),
+            s.field_type,
+            s.timestamp_basis,
         ]
         writer.writerow(row)
 

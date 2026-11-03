@@ -1,6 +1,6 @@
 # VCF Operations Metrics Explorer
 
-VCF Operations Metrics Explorer is a lightweight, cross-platform utility that connects to VMware Cloud Foundation Operations (formerly Aria Operations / vRealize Operations) to discover inventory objects, select performance metrics, execute multi-group historical collection jobs, and export aligned results to CSV, Excel (.xlsx), and JSON.
+VCF Operations Metrics Explorer is a lightweight, cross-platform utility that connects to VMware Cloud Foundation Operations (formerly Aria Operations / vRealize Operations) to discover inventory objects, select metrics and current properties, execute multi-group historical collection jobs, and export aligned results to CSV, Excel (.xlsx), and JSON.
 
 The application includes a native PySide6 Qt Widgets desktop app styled with Lattice and a fully scriptable CLI backed by the same collection engine. It packages into a single standalone executable on Windows, macOS, and Linux without requiring users to install Python or other runtimes.
 
@@ -50,14 +50,14 @@ This project combines the strengths and resolves the defects identified during s
 | **Language & Runtime** | PowerShell script (Windows-centric) | Python standard library scripts | Pure Python core packaged as cross-platform native executables |
 | **TLS Verification** | Broken: assignment bug `if ($ignoreSSL = $true)` unconditionally disabled TLS | Disabled by default | Enabled by default; explicit `--insecure` flag with clear warning |
 | **CSV Object Import** | Broken: `-Header` parameter caused column titles to be parsed as inventory objects | Not supported | Flexible CSV parsing with automatic header detection and name resolution |
-| **Inventory Pagination** | Single query with `pageSize=100000` (fails on large estates) | Iterative page loop (`pageSize=1000`) | Robust iterative pagination with client-side name/query filtering |
+| **Inventory Pagination** | Single query with `pageSize=100000` (fails on large estates) | Iterative page loop (`pageSize=1000`) | Server-side paging and name filtering; counts come from the server |
 | **Collection Semantics** | Batched `/resources/stats` historical range queries | Per-resource `/resources/stats/latest` latest-N-samples queries | Both supported: historical range/rollup is canonical, with latest-N fallback |
 | **Request Batching & Limits** | All IDs in a single GET query string (exceeds URL limits) | One HTTP request per object via thread pool | Bounded batching (up to 40 resources per query) with fallback to single queries |
 | **Timestamp Alignment** | Assumed identical timestamps across all metrics (indexes corrupt on gaps) | Union of timestamps with `None` fill | Full timestamp union alignment across all metrics, objects, and groups |
 | **Collection Groups** | Single resource kind per run | Single object type and single stat list | Multiple independent groups with deduplicated querying and clean attribution |
 | **Export Formats** | CSV only (separated by kind) | Custom standard-library XLSX and JSON | Canonical long CSV, wide CSV, multi-sheet XLSX (with sheet splitting), JSON, and terminal table |
 | **Formula Injection Protection** | None | None | Sanitizes values starting with `=`, `+`, `-`, `@`, `\t`, `\r` |
-| **Profile Management** | None | Browser localStorage only | Versioned JSON profile schema (`schema_version: "1.0"`), shared between GUI and CLI |
+| **Profile Management** | None | Browser localStorage only | Versioned JSON profile schema (`schema_version: "2.0"; loads 1.0 profiles`), shared between GUI and CLI |
 
 ---
 
@@ -102,9 +102,9 @@ The CLI separates structured data on stdout from operational progress on stderr,
 
 ### Exit Codes
 
-- `0`: Success (all requested objects and metrics collected).
+- `0`: Success. Missing samples, absent keys and objects without data are reported as warnings and do not change the exit code.
 - `1`: Fatal error (authentication rejected, network failure, or invalid profile).
-- `2`: Partial success (warnings recorded or subset of metrics/objects returned null).
+- `2`: Partial success (some requested work failed, such as a metric batch, a property fetch or an object lookup, while other data was collected). If every sample is null and errors were recorded the run is an error.
 
 ---
 
@@ -115,15 +115,19 @@ Run `ops-metric-harvest gui`, or double-click the standalone executable. The app
 ![Native connection screen in the light Lattice theme](docs/images/native-connection.png)
 
 1. **Connection**: Enter the VCF Operations URL, select username/password or OpsToken, and test the connection. Refresh the login source picker or enter a source manually. Browse for a trusted CA bundle, or explicitly ignore SSL validation with a visible warning.
-2. **Objects**: Add and switch collection groups. Each group has a resource kind, adapter, and All, name filter, CSV import, or explicit name/ID selection. Preview up to 200 matching objects; collection resolves the full selection. Objects and Metrics are separate screen modules so the next live-selection milestone can replace them.
-3. **Metrics**: Load and filter the catalogue, check metrics, select starter metrics, or enter manual stat keys. Filtering keeps checked metrics selected. Changing a group's resource kind or adapter clears that group's metric selection.
+2. **Objects**: Connect to discover live adapters and types. Search names within a type, browse server pages, and check individual objects for a fixed set of IDs, or choose all matching the type/filter for a dynamic selection. Counts come from the server; absent totals are shown as unknown. Review or clear the selection at any time. Parents and children open paged relationship views. Browse a related type to select it in its own group. Paste/import is a secondary path that resolves exact names or IDs and reports ambiguous and unresolved names.
+3. **Fields**: One searchable, grouped catalogue with Metrics and Properties tabs shows keys, units and descriptions plus a selected basket. Each adapter/type has its own collection group and basket; changing a selected scope preserves it in a separate group. Properties come from the server catalogue. If discovery fails, the Properties tab is disabled with the API error. Starter metrics and raw keys remain fallbacks.
 4. **Collection**: Choose a relative duration, absolute UTC range using calendar controls, or latest N samples. Select rollup settings, export timezone, long/wide CSV, Excel, JSON, or text table, and an output folder with a native picker.
 5. **Run**: Review the group scope, start collection, monitor progress, and cancel between requests. Closing during a request waits for that operation to finish. The summary shows objects, samples, warnings, errors, output paths, and a preview of up to 200 samples. Each run writes into a new timestamped subfolder, avoiding overwriting earlier exports. Export failures leave the result preview available.
-6. **Profiles**: Load and save schema-versioned JSON profiles shared with the CLI, including multiple groups. Profiles exclude passwords and tokens. Loading a profile clears current credentials.
+6. **Profiles**: Save the full job as schema 2.0 JSON, shared with the CLI: groups, selectors, metric/property keys, time and export settings. Version 1.0 profiles still load. Fixed selections reuse the saved resource IDs; dynamic selections re-evaluate the type/filter on every run and may include new objects. Missing IDs and ambiguous legacy names are reported. Profiles exclude passwords and tokens. Loading clears current credentials.
 
 ![Native collection settings in the dark Lattice theme](docs/images/native-collection-dark.png)
 
-The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. The CLI commands and collection engine retain their existing behavior. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
+Properties are always the latest string values, independent of the historical metric range or latest-N setting. The API supplies no property source timestamp, so property rows record collection time with `FieldType=property` and `TimestampBasis=collection`. Missing values remain null and are reported in results. Long CSV/XLSX and JSON distinguish field type and timestamp basis; wide exports label property columns separately even when a metric has the same key. In wide exports the latest property values repeat on every metric row of the same object; an object with no metric rows gets a single property-only row.
+
+CLI `profiles run` honors saved property selections, output folders and `csv_wide` exports as well as existing metric profiles.
+
+The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
 
 For development, `make smoke-gui` launches under Xvfb, captures the connection screen, and exits. Set `GUI_SCREENSHOT` to choose the PNG path. CI also launches the packaged executable and retains its screenshots as artifacts.
 
@@ -131,13 +135,13 @@ For development, `make smoke-gui` launches under Xvfb, captures the connection s
 
 ## Collection Profile Format
 
-Profiles use schema version 1.0. Profiles define job selectors and output settings, and never store passwords or authentication tokens.
+Profiles use schema version 2.0; version 1.0 profiles still load. Profiles define job selectors, metric and property keys (`metric_set.stat_keys` and `metric_set.property_keys`), and output settings, and never store passwords or authentication tokens.
 
 Example profile:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "name": "Scenario A: All Host Systems",
   "connection": {
     "server": "vcf-ops.example.com",
