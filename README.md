@@ -50,7 +50,7 @@ This project combines the strengths and resolves the defects identified during s
 | **Language & Runtime** | PowerShell script (Windows-centric) | Python standard library scripts | Pure Python core packaged as cross-platform native executables |
 | **TLS Verification** | Broken: assignment bug `if ($ignoreSSL = $true)` unconditionally disabled TLS | Disabled by default | Enabled by default; explicit `--insecure` flag with clear warning |
 | **CSV Object Import** | Broken: `-Header` parameter caused column titles to be parsed as inventory objects | Not supported | Flexible CSV parsing with automatic header detection and name resolution |
-| **Inventory Pagination** | Single query with `pageSize=100000` (fails on large estates) | Iterative page loop (`pageSize=1000`) | Robust iterative pagination with client-side name/query filtering |
+| **Inventory Pagination** | Single query with `pageSize=100000` (fails on large estates) | Iterative page loop (`pageSize=1000`) | Server-side paging and name filtering; counts come from the server |
 | **Collection Semantics** | Batched `/resources/stats` historical range queries | Per-resource `/resources/stats/latest` latest-N-samples queries | Both supported: historical range/rollup is canonical, with latest-N fallback |
 | **Request Batching & Limits** | All IDs in a single GET query string (exceeds URL limits) | One HTTP request per object via thread pool | Bounded batching (up to 40 resources per query) with fallback to single queries |
 | **Timestamp Alignment** | Assumed identical timestamps across all metrics (indexes corrupt on gaps) | Union of timestamps with `None` fill | Full timestamp union alignment across all metrics, objects, and groups |
@@ -127,7 +127,7 @@ Properties are always the latest string values, independent of the historical me
 
 CLI `profiles run` honors saved property selections, output folders and `csv_wide` exports as well as existing metric profiles.
 
-The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. The CLI commands and collection engine retain their existing behavior. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
+The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
 
 For development, `make smoke-gui` launches under Xvfb, captures the connection screen, and exits. Set `GUI_SCREENSHOT` to choose the PNG path. CI also launches the packaged executable and retains its screenshots as artifacts.
 
@@ -135,13 +135,13 @@ For development, `make smoke-gui` launches under Xvfb, captures the connection s
 
 ## Collection Profile Format
 
-Profiles use schema version 1.0. Profiles define job selectors and output settings, and never store passwords or authentication tokens.
+Profiles use schema version 2.0; version 1.0 profiles still load. Profiles define job selectors, metric and property keys (`metric_set.stat_keys` and `metric_set.property_keys`), and output settings, and never store passwords or authentication tokens.
 
 Example profile:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "name": "Scenario A: All Host Systems",
   "connection": {
     "server": "vcf-ops.example.com",
