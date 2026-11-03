@@ -331,6 +331,8 @@ class MainWindow(QMainWindow):
         metrics, properties, error = payload
         self.metrics.set_catalogue(metrics)
         self.metrics.set_properties(properties, error=error)
+        if not metrics:
+            self.metrics.set_status("No metric catalogue returned. Check the connection, adapter, and kind; manual keys remain available.")
 
     @staticmethod
     def count_key(selector, query=None):
