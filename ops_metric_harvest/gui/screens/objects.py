@@ -134,6 +134,9 @@ class ObjectsPage(Page):
         selector.adapter_kind, selector.resource_kind = adapter, kind
         if selector.selection_mode not in ("imported", "explicit"):
             selector = ObjectSelector(kind, "explicit", adapter)
+        if selector.selection_mode == "imported" and self.selected:
+            # Checked objects replace the imported list; the engine ignores IDs on an imported selector.
+            selector = ObjectSelector(kind, "explicit", adapter)
         selector.resource_ids = list(self.selected)
         if selector.selection_mode != "imported":
             selector.csv_path = selector.csv_content = None
@@ -270,7 +273,9 @@ class ObjectsPage(Page):
             text = f"Dynamic: all {self.kind.currentText()} matching '{self.query.text().strip() or '*'}'"
         else:
             text = f"{len(self.selected)} fixed IDs"
-            if self._selector.names or self._selector.selection_mode == "imported":
+            if self._selector.selection_mode == "imported" and self.selected:
+                text += " · replaces the imported list"
+            elif self._selector.names or self._selector.selection_mode == "imported":
                 text += " · legacy list requires resolution"
         self.summary.setText(text)
         self.review_list.setPlainText(text + "\n" + "\n".join(f"{name}  {rid}" for rid, name in self.selected.items()))
