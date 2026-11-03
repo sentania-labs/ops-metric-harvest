@@ -98,7 +98,7 @@ class ObjectsPage(Page):
         self.children.clicked.connect(lambda: self.show_relations("CHILD"))
         self.open_type.clicked.connect(self.browse_related_type)
         self.browse.clicked.connect(self.search)
-        self.dynamic.toggled.connect(self.update_summary)
+        self.dynamic.toggled.connect(self.change_selection_mode)
         self.review.clicked.connect(self.toggle_review)
         self.clear.clicked.connect(self.clear_selection)
         self.secondary.toggled.connect(self.update_fields)
@@ -135,6 +135,8 @@ class ObjectsPage(Page):
         if selector.selection_mode not in ("imported", "explicit"):
             selector = ObjectSelector(kind, "explicit", adapter)
         selector.resource_ids = list(self.selected)
+        if selector.selection_mode != "imported":
+            selector.csv_path = selector.csv_content = None
         return selector
 
     def load(self, group):
@@ -146,6 +148,9 @@ class ObjectsPage(Page):
         self.csv.edit.setText(group.selector.csv_path or "")
         self.names.setPlainText("\n".join(group.selector.names))
         self._selector = deepcopy(group.selector)
+        if self._selector.selection_mode != "imported":
+            self._selector.csv_path = self._selector.csv_content = None
+            self.csv.edit.clear()
         self.selected = {rid: rid for rid in group.selector.resource_ids}
         self.dynamic.setChecked(group.selector.selection_mode in ("all", "search"))
         self.secondary.setChecked(bool(group.selector.names or group.selector.csv_path or group.selector.csv_content))
@@ -216,7 +221,7 @@ class ObjectsPage(Page):
         if "resolved" in result:
             for resource in result["resolved"]:
                 self.selected[resource["resourceId"]] = resource["name"]
-            self._selector = ObjectSelector(self.kind.currentText(), "explicit", self.adapter.currentText())
+            self.use_fixed_selection()
             self.dynamic.setChecked(False)
             self.update_summary()
             self.set_status("\n".join(result["warnings"]) or "List resolved to fixed IDs.")
@@ -247,7 +252,17 @@ class ObjectsPage(Page):
             self.selected[resource["resourceId"]] = resource["name"]
         else:
             self.selected.pop(resource["resourceId"], None)
+        self.use_fixed_selection()
         self.dynamic.setChecked(False)
+        self.update_summary()
+
+    def use_fixed_selection(self):
+        self._selector = ObjectSelector(self.kind.currentText(), "explicit", self.adapter.currentText())
+        self.csv.edit.clear()
+
+    def change_selection_mode(self, dynamic):
+        if dynamic and not self._loading:
+            self.use_fixed_selection()
         self.update_summary()
 
     def update_summary(self):
@@ -265,7 +280,7 @@ class ObjectsPage(Page):
 
     def clear_selection(self):
         self.selected.clear()
-        self._selector = ObjectSelector(self.kind.currentText(), "explicit", self.adapter.currentText())
+        self.use_fixed_selection()
         self.dynamic.setChecked(False)
         self.matches.blockSignals(True)
         for row in range(self.matches.rowCount()):

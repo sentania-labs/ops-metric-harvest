@@ -373,3 +373,51 @@ def test_gui_command_smoke_exits_cleanly(tmp_path):
                             env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr.decode()
     assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("mode", ["all", "search", "explicit"])
+def test_non_imported_stale_csv_path_does_not_block_run(window, tmp_path, mode):
+    window.metrics.select_starters()
+    job = window.snapshot()
+    job.groups[0].selector = ObjectSelector(
+        "VirtualMachine", mode, search_query="vm", resource_ids=["id-a"],
+        csv_path=str(tmp_path / "missing.csv"))
+    window.validate(job, for_run=True)
+
+
+@pytest.mark.parametrize("selection", ["dynamic", "fixed"])
+def test_leaving_imported_selection_clears_stale_csv(window, tmp_path, selection):
+    group = CollectionGroup("Imported", "VirtualMachine",
+                            ObjectSelector("VirtualMachine", "imported", csv_path=str(tmp_path / "missing.csv")),
+                            MetricSet(["cpu|usage"]))
+    window.objects.load(group)
+    window.metrics.load(group.metric_set, group.resource_kind)
+    with pytest.raises(ValueError, match="CSV file does not exist"):
+        window.validate(window.snapshot(), for_run=True)
+    if selection == "dynamic":
+        window.objects.dynamic.setChecked(True)
+        assert window.objects.value().selection_mode == "all"
+        # Returning to fixed selection must not reactivate the old import.
+        window.objects.dynamic.setChecked(False)
+    window.objects.show_matches({"resources": [{"resourceId": "id-a", "name": "vm-a", "adapterKind": "VMWARE",
+                                               "resourceKind": "VirtualMachine"}],
+                                 "page": 0, "total": 1, "has_next": False})
+    window.objects.matches.item(0, 0).setCheckState(Qt.Checked)
+    selector = window.objects.value()
+    assert selector.selection_mode == "explicit"
+    assert selector.resource_ids == ["id-a"]
+    assert selector.csv_path is None and selector.csv_content is None
+    assert window.objects.csv.edit.text() == ""
+    window.validate(window.snapshot(), for_run=True)
+
+
+def test_non_imported_loaded_profile_drops_inactive_csv(window, tmp_path):
+    group = CollectionGroup("Fixed", "VirtualMachine",
+                            ObjectSelector("VirtualMachine", "explicit", resource_ids=["id-a"],
+                                           csv_path=str(tmp_path / "missing.csv"), csv_content="Name\nvm-b"),
+                            MetricSet(["cpu|usage"]))
+    window.objects.load(group)
+    selector = window.objects.value()
+    assert selector.resource_ids == ["id-a"]
+    assert selector.csv_path is None and selector.csv_content is None
+    assert window.objects.csv.edit.text() == ""

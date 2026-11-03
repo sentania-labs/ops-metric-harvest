@@ -217,7 +217,8 @@ class MainWindow(QMainWindow):
                 raise ValueError(f"{group.name}: enter at least one object name or ID.")
             if selector.selection_mode == "imported" and not (selector.csv_content or selector.csv_path):
                 raise ValueError(f"{group.name}: choose a CSV file.")
-            if for_run and selector.csv_path and not selector.csv_content and not Path(selector.csv_path).is_file():
+            if (for_run and selector.selection_mode == "imported" and selector.csv_path
+                    and not selector.csv_content and not Path(selector.csv_path).is_file()):
                 raise ValueError(f"{group.name}: CSV file does not exist.")
         if for_run:
             if not job.export_config["formats"]:
