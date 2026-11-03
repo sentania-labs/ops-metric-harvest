@@ -277,7 +277,7 @@ def test_scenario_e_error_resilience(mock_client):
     # metric_a: [1000, 2000, 3000] -> [10.5, 20.5, 30.5]
     # metric_b: [2000, 3000, 4000] -> [200.0, 300.0, 400.0]
     result = engine.execute(job)
-    assert result.status == "success"
+    assert result.status == "partial"
 
     # Union of timestamps across metrics is [1000, 2000, 3000, 4000] (4 distinct timestamps)
     # 4 timestamps * 2 metrics = 8 samples

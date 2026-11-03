@@ -17,4 +17,9 @@ def apply_theme(app, theme="light"):
                 palette.setColor(getattr(QPalette.ColorGroup, group), role, QColor(color))
     app.setPalette(palette)
     filename = "lattice.qss" if theme == "light" else "lattice-dark.qss"
-    app.setStyleSheet((ASSETS / filename).read_text())
+    # Give native checkbox indicators a visible outline on the Lattice surface.
+    indicators = """
+    QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid palette(mid); border-radius: 2px; background: palette(base); }
+    QCheckBox::indicator:checked { background: palette(highlight); border-color: palette(highlight); }
+    """
+    app.setStyleSheet((ASSETS / filename).read_text() + indicators)

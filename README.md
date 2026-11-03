@@ -1,6 +1,6 @@
 # VCF Operations Metrics Explorer
 
-VCF Operations Metrics Explorer is a lightweight, cross-platform utility that connects to VMware Cloud Foundation Operations (formerly Aria Operations / vRealize Operations) to discover inventory objects, select performance metrics, execute multi-group historical collection jobs, and export aligned results to CSV, Excel (.xlsx), and JSON.
+VCF Operations Metrics Explorer is a lightweight, cross-platform utility that connects to VMware Cloud Foundation Operations (formerly Aria Operations / vRealize Operations) to discover inventory objects, select metrics and current properties, execute multi-group historical collection jobs, and export aligned results to CSV, Excel (.xlsx), and JSON.
 
 The application includes a native PySide6 Qt Widgets desktop app styled with Lattice and a fully scriptable CLI backed by the same collection engine. It packages into a single standalone executable on Windows, macOS, and Linux without requiring users to install Python or other runtimes.
 
@@ -57,7 +57,7 @@ This project combines the strengths and resolves the defects identified during s
 | **Collection Groups** | Single resource kind per run | Single object type and single stat list | Multiple independent groups with deduplicated querying and clean attribution |
 | **Export Formats** | CSV only (separated by kind) | Custom standard-library XLSX and JSON | Canonical long CSV, wide CSV, multi-sheet XLSX (with sheet splitting), JSON, and terminal table |
 | **Formula Injection Protection** | None | None | Sanitizes values starting with `=`, `+`, `-`, `@`, `\t`, `\r` |
-| **Profile Management** | None | Browser localStorage only | Versioned JSON profile schema (`schema_version: "1.0"`), shared between GUI and CLI |
+| **Profile Management** | None | Browser localStorage only | Versioned JSON profile schema (`schema_version: "2.0"; loads 1.0 profiles`), shared between GUI and CLI |
 
 ---
 
@@ -115,13 +115,17 @@ Run `ops-metric-harvest gui`, or double-click the standalone executable. The app
 ![Native connection screen in the light Lattice theme](docs/images/native-connection.png)
 
 1. **Connection**: Enter the VCF Operations URL, select username/password or OpsToken, and test the connection. Refresh the login source picker or enter a source manually. Browse for a trusted CA bundle, or explicitly ignore SSL validation with a visible warning.
-2. **Objects**: Add and switch collection groups. Each group has a resource kind, adapter, and All, name filter, CSV import, or explicit name/ID selection. Preview up to 200 matching objects; collection resolves the full selection. Objects and Metrics are separate screen modules so the next live-selection milestone can replace them.
-3. **Metrics**: Load and filter the catalogue, check metrics, select starter metrics, or enter manual stat keys. Filtering keeps checked metrics selected. Changing a group's resource kind or adapter clears that group's metric selection.
+2. **Objects**: Connect to discover live adapters and types. Search names within a type, browse server pages, and check individual objects for a fixed set of IDs, or choose all matching the type/filter for a dynamic selection. Counts come from the server; absent totals are shown as unknown. Review or clear the selection at any time. Parents and children open paged relationship views. Browse a related type to select it in its own group. Paste/import is a secondary path that resolves exact names or IDs and reports ambiguous and unresolved names.
+3. **Fields**: One searchable, grouped catalogue with Metrics and Properties tabs shows keys, units and descriptions plus a selected basket. Each adapter/type has its own collection group and basket; changing a selected scope preserves it in a separate group. Properties come from the server catalogue. If discovery fails, the Properties tab is disabled with the API error. Starter metrics and raw keys remain fallbacks.
 4. **Collection**: Choose a relative duration, absolute UTC range using calendar controls, or latest N samples. Select rollup settings, export timezone, long/wide CSV, Excel, JSON, or text table, and an output folder with a native picker.
 5. **Run**: Review the group scope, start collection, monitor progress, and cancel between requests. Closing during a request waits for that operation to finish. The summary shows objects, samples, warnings, errors, output paths, and a preview of up to 200 samples. Each run writes into a new timestamped subfolder, avoiding overwriting earlier exports. Export failures leave the result preview available.
-6. **Profiles**: Load and save schema-versioned JSON profiles shared with the CLI, including multiple groups. Profiles exclude passwords and tokens. Loading a profile clears current credentials.
+6. **Profiles**: Save the full job as schema 2.0 JSON, shared with the CLI: groups, selectors, metric/property keys, time and export settings. Version 1.0 profiles still load. Fixed selections reuse the saved resource IDs; dynamic selections re-evaluate the type/filter on every run and may include new objects. Missing IDs and ambiguous legacy names are reported. Profiles exclude passwords and tokens. Loading clears current credentials.
 
 ![Native collection settings in the dark Lattice theme](docs/images/native-collection-dark.png)
+
+Properties are always the latest string values, independent of the historical metric range or latest-N setting. The API supplies no property source timestamp, so property rows record collection time with `FieldType=property` and `TimestampBasis=collection`. Missing values remain null and are reported in results. Long CSV/XLSX and JSON distinguish field type and timestamp basis; wide exports label property columns separately even when a metric has the same key.
+
+CLI `profiles run` honors saved property selections, output folders and `csv_wide` exports as well as existing metric profiles.
 
 The GUI has no web server or embedded browser. Network and engine operations run in a background Qt thread. The CLI commands and collection engine retain their existing behavior. Cancellation is cooperative; the current request and its configured retry budget may finish before the app stops.
 

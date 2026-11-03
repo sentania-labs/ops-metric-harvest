@@ -153,6 +153,7 @@ def cmd_objects_search(args: argparse.Namespace) -> int:
             resource_kind=args.kind,
             name_query=args.query,
             max_resources=args.limit,
+            adapter_kind=args.adapter,
         )
         if args.format == "json":
             print(json.dumps(results, indent=2))
@@ -278,6 +279,11 @@ def run_collection_and_export(
                 export_csv_long(result, file_path=csv_path, tz_name=timezone_name)
             if not quiet:
                 eprint(f"Exported CSV: {csv_path}")
+        elif f == "csv_wide":
+            csv_path = f"{base_path}.wide.csv"
+            export_csv_wide(result, file_path=csv_path, tz_name=timezone_name)
+            if not quiet:
+                eprint(f"Exported wide CSV: {csv_path}")
         elif f == "xlsx":
             xlsx_path = f"{base_path}.xlsx"
             export_xlsx(result, file_path=xlsx_path, tz_name=timezone_name)
@@ -419,6 +425,12 @@ def cmd_profiles_run(args: argparse.Namespace) -> int:
 
     formats = [f.strip() for f in args.format.split(",") if f.strip()] if args.format else job.export_config.get("formats", ["csv", "xlsx"])
     output_base = args.output or job.export_config.get("output_path")
+    if not output_base and job.export_config.get("output_dir"):
+        import tempfile
+        from pathlib import Path
+        folder = Path(job.export_config["output_dir"]).expanduser()
+        folder.mkdir(parents=True, exist_ok=True)
+        output_base = str(Path(tempfile.mkdtemp(prefix="harvest-", dir=folder)) / "metrics")
     tz = args.timezone or job.export_config.get("timezone", "America/Chicago")
     wide = args.wide or job.export_config.get("wide_format", False)
 
@@ -477,6 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_search = objs_sub.add_parser("search", parents=[conn_parent], help="Search objects by kind and name")
     p_search.add_argument("--kind", default="VirtualMachine", help="Resource kind (default: VirtualMachine)")
+    p_search.add_argument("--adapter", default="VMWARE", help="Adapter kind (default: VMWARE)")
     p_search.add_argument("--query", help="Substring filter on object name")
     p_search.add_argument("--limit", type=int, default=50, help="Maximum objects to return")
     p_search.add_argument("--format", choices=["table", "json"], default="table", help="Output format")

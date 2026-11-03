@@ -47,7 +47,7 @@ class CollectionEngine:
     def resolve_group_objects(
         self,
         group: CollectionGroup,
-        all_inventory_cache: Dict[str, List[Dict[str, Any]]],
+        all_inventory_cache: Dict[Tuple[str, str], List[Dict[str, Any]]],
     ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
         """Resolve target objects for a collection group.
 
@@ -57,29 +57,41 @@ class CollectionEngine:
         kind = group.resource_kind
         selector = group.selector
         mode = selector.selection_mode
+        adapter = selector.adapter_kind or "VMWARE"
+        cache_key = (adapter, kind)
         warnings: List[str] = []
         errors: List[Dict[str, Any]] = []
 
         # Populate inventory for kind
         inventory: List[Dict[str, Any]] = []
 
-        if mode == "search" and selector.search_query:
+        if mode == "explicit" and selector.resource_ids and not selector.names:
+            try:
+                for offset in range(0, len(selector.resource_ids), 50):
+                    if self.should_stop():
+                        raise EngineError("Collection cancelled by user")
+                    inventory.extend(self.client.search_resources(
+                        kind, adapter_kind=adapter, resource_ids=selector.resource_ids[offset:offset + 50],
+                        should_stop=self.should_stop))
+            except Exception as exc:
+                errors.append({"group": group.name, "error": str(exc)})
+        elif mode == "search" and selector.search_query:
             self._log(f"Searching inventory for '{selector.search_query}' in kind '{kind}'...")
             try:
-                inventory = self.client.search_resources(kind, name_query=selector.search_query)
+                inventory = self.client.search_resources(kind, name_query=selector.search_query, adapter_kind=adapter, should_stop=self.should_stop)
             except Exception as e:
                 msg = f"Failed to search inventory for {kind}: {e}"
                 errors.append({"group": group.name, "resource_kind": kind, "error": msg})
                 return [], warnings, errors
         elif mode == "explicit" and selector.names and len(selector.names) <= 10 and not selector.resource_ids:
-            if kind in all_inventory_cache:
-                inventory = all_inventory_cache[kind]
+            if cache_key in all_inventory_cache:
+                inventory = all_inventory_cache[cache_key]
             else:
                 self._log(f"Resolving {len(selector.names)} explicit object(s) for kind '{kind}'...")
                 targeted: List[Dict[str, Any]] = []
                 for n in selector.names:
                     try:
-                        matches = self.client.search_resources(kind, name_query=n.strip())
+                        matches = self.client.search_resources(kind, name_query=n.strip(), adapter_kind=adapter, should_stop=self.should_stop)
                         targeted.extend(matches)
                     except Exception as e:
                         logger.debug("Targeted lookup failed for %s: %s", n, e)
@@ -102,26 +114,28 @@ class CollectionEngine:
                 else:
                     self._log(f"Discovering full inventory for resource kind '{kind}'...")
                     try:
-                        all_inventory_cache[kind] = self.client.search_resources(kind)
-                        inventory = all_inventory_cache[kind]
+                        all_inventory_cache[cache_key] = self.client.search_resources(kind, adapter_kind=adapter, should_stop=self.should_stop)
+                        inventory = all_inventory_cache[cache_key]
                     except Exception as e:
                         msg = f"Failed to list inventory for {kind}: {e}"
                         errors.append({"group": group.name, "resource_kind": kind, "error": msg})
                         return [], warnings, errors
         else:
-            if kind not in all_inventory_cache:
+            if cache_key not in all_inventory_cache:
                 self._log(f"Discovering inventory for resource kind '{kind}'...")
                 try:
-                    all_inventory_cache[kind] = self.client.search_resources(kind)
+                    all_inventory_cache[cache_key] = self.client.search_resources(kind, adapter_kind=adapter, should_stop=self.should_stop)
                 except Exception as e:
                     msg = f"Failed to list inventory for {kind}: {e}"
                     errors.append({"group": group.name, "resource_kind": kind, "error": msg})
                     return [], warnings, errors
-            inventory = all_inventory_cache[kind]
+            inventory = all_inventory_cache[cache_key]
         # Deduplicate inventory by resourceId
         deduped_inventory: List[Dict[str, Any]] = []
         seen_inv_ids: Set[str] = set()
         for r in inventory:
+            if r.get("adapterKind") != adapter or r.get("resourceKind") != kind:
+                continue
             rid = r.get("resourceId")
             if rid and rid not in seen_inv_ids:
                 seen_inv_ids.add(rid)
@@ -268,7 +282,7 @@ class CollectionEngine:
         start_mono = time.monotonic()
         all_warnings: List[str] = []
         all_errors: List[Dict[str, Any]] = []
-        all_inventory_cache: Dict[str, List[Dict[str, Any]]] = {}
+        all_inventory_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         metric_catalogues: Dict[str, Dict[str, Dict[str, str]]] = {}
 
         if not job.groups:
@@ -383,7 +397,9 @@ class CollectionEngine:
                       completed_resources, total_resources)
 
             try:
-                if time_range.max_samples and time_range.mode == "relative":
+                if not stat_keys_list:
+                    batch_res = {}
+                elif time_range.max_samples and time_range.mode == "relative":
                     batch_res = self.client.get_resources_stats_latest(
                         chunk_rids, stat_keys_list, max_samples=time_range.max_samples
                     )
@@ -429,7 +445,7 @@ class CollectionEngine:
                 all_ts = sorted({ts for sk in stat_keys for ts in res_series.get(sk, {})})
 
                 # If no timestamps found, record that no data returned
-                if not all_ts:
+                if stat_keys and not all_ts:
                     all_warnings.append(f"No metric data returned for resource '{rname}' in group '{group_name}'")
 
                 for ts in all_ts:
@@ -453,11 +469,42 @@ class CollectionEngine:
                         samples.append(sample)
                         total_samples_count += 1
 
+        # Properties are current strings, independent of the historical metric range.
+        property_values = {}
+        for group in job.groups:
+            keys = group.metric_set.property_keys
+            if not keys:
+                continue
+            for obj in group_objects[group.group_id]:
+                if self.should_stop():
+                    raise EngineError("Collection cancelled by user")
+                rid = obj["resourceId"]
+                if rid not in property_values:
+                    try:
+                        values = self.client.get_resource_properties(rid)
+                        property_values[rid] = (values, int(time.time() * 1000))
+                    except Exception as exc:
+                        all_errors.append({"resourceId": rid, "error": f"Properties: {exc}"})
+                        property_values[rid] = ({}, int(time.time() * 1000))
+                values, collected_ms = property_values[rid]
+                for key in keys:
+                    meta = group.metric_set.property_metadata.get(key, {})
+                    if key not in values:
+                        all_warnings.append(f"Missing property '{key}' for '{obj['name']}'")
+                    samples.append(MetricSample(
+                        group.group_id, group.name, rid, obj["name"], group.resource_kind,
+                        key, meta.get("name", key), collected_ms, iso_utc_from_ms(collected_ms),
+                        values.get(key), meta.get("unit", ""), "property", "collection"))
+                self._log(f"Collected latest properties for {obj['name']}")
+        missing = sum(sample.value is None for sample in samples)
+        if missing:
+            all_warnings.append(f"{missing} requested field values are missing")
+        total_samples_count = len(samples)
         elapsed = round(time.monotonic() - start_mono, 2)
         status = "success"
         if all_errors and not samples:
             status = "error"
-        elif all_errors:
+        elif all_errors or all_warnings:
             status = "partial"
         else:
             status = "success"

@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Tuple
 
 from ops_metric_harvest.models import CollectionJob
 
-CURRENT_SCHEMA_VERSION = "1.0"
-SUPPORTED_SCHEMA_VERSIONS = {"1.0"}
+CURRENT_SCHEMA_VERSION = "2.0"
+SUPPORTED_SCHEMA_VERSIONS = {"1.0", "2.0"}
 
 
 class ProfileValidationError(Exception):
@@ -55,6 +55,8 @@ def validate_profile_dict(data: Dict[str, Any]) -> List[str]:
             raise ProfileValidationError(f"Group '{grp_name}' is missing required 'resource_kind'")
 
         selector = grp.get("selector", {})
+        if selector.get("resource_kind", kind) != kind:
+            raise ProfileValidationError(f"Group '{grp_name}' selector kind must match its collection kind")
         mode = selector.get("selection_mode", "all")
         if mode not in ("all", "search", "explicit", "imported"):
             raise ProfileValidationError(f"Group '{grp_name}' has invalid selection_mode '{mode}'")
@@ -72,8 +74,8 @@ def validate_profile_dict(data: Dict[str, Any]) -> List[str]:
 
         metric_set = grp.get("metric_set", {})
         stat_keys = metric_set.get("stat_keys", [])
-        if not stat_keys:
-            raise ProfileValidationError(f"Group '{grp_name}' must specify at least one stat key in metric_set.stat_keys")
+        if not stat_keys and not metric_set.get("property_keys"):
+            raise ProfileValidationError(f"Group '{grp_name}' must specify at least one stat key or property key")
 
     # 4. Check time range
     tr = data.get("time_range", {})

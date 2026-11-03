@@ -103,10 +103,14 @@ class ObjectSelector:
 class MetricSet:
     stat_keys: List[str] = field(default_factory=list)
     metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    property_keys: List[str] = field(default_factory=list)
+    property_metadata: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "stat_keys": list(self.stat_keys),
+            "property_keys": list(self.property_keys),
+            "property_metadata": {k: dict(v) for k, v in self.property_metadata.items()},
             "metadata": {k: dict(v) for k, v in self.metadata.items()},
         }
 
@@ -114,7 +118,8 @@ class MetricSet:
     def from_dict(cls, data: Dict[str, Any]) -> MetricSet:
         keys = data.get("stat_keys", [])
         meta = data.get("metadata", {})
-        return cls(stat_keys=list(keys), metadata=dict(meta))
+        return cls(stat_keys=list(keys), metadata=dict(meta), property_keys=list(data.get("property_keys", [])),
+                   property_metadata=dict(data.get("property_metadata", {})))
 
 
 @dataclass
@@ -214,7 +219,7 @@ class CollectionJob:
     time_range: TimeRange = field(default_factory=TimeRange)
     connection: Dict[str, Any] = field(default_factory=dict)
     export_config: Dict[str, Any] = field(default_factory=dict)
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
 
     def to_dict(self) -> Dict[str, Any]:
         # Strip any credentials if inadvertently present
@@ -260,8 +265,10 @@ class MetricSample:
     metric_name: str
     timestamp_ms: int
     time_utc: str
-    value: Optional[float]
+    value: Any
     unit: str = ""
+    field_type: str = "metric"
+    timestamp_basis: str = "sample"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -271,6 +278,8 @@ class MetricSample:
             "resource_name": self.resource_name,
             "resource_kind": self.resource_kind,
             "metric_key": self.metric_key,
+            "field_type": self.field_type,
+            "timestamp_basis": self.timestamp_basis,
             "metric_name": self.metric_name,
             "timestamp_ms": self.timestamp_ms,
             "time_utc": self.time_utc,
