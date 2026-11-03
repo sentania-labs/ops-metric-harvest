@@ -80,7 +80,7 @@ def test_properties_current_values_missing_data_and_export_namespaces():
     selected = group(ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-000", "vm-001"]),
                      ["config|os", "missing"])
     result = CollectionEngine(client).execute(CollectionJob("mixed", [selected]))
-    assert result.status == "partial"
+    assert result.status == "success" and not result.errors
     props = [s for s in result.samples if s.field_type == "property"]
     assert {s.timestamp_basis for s in props} == {"collection"}
     assert [s.value for s in props] == ["Linux", None, "Linux", None]
@@ -199,3 +199,54 @@ def test_properties_failure_is_reported_without_losing_metrics():
     assert result.status == "partial" and result.errors
     assert any(s.value == 23.5 for s in result.samples if s.field_type == "metric")
     assert any(s.value is None for s in result.samples if s.field_type == "property")
+
+
+def test_every_property_fetch_failing_is_an_error_and_progress_is_counted():
+    client = LiveClient()
+    only_props = CollectionGroup("Props", "VirtualMachine",
+                                 ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-000", "vm-001", "vm-002"]),
+                                 MetricSet([], property_keys=["config|os"]))
+    progress = []
+    engine = CollectionEngine(client, progress_cb=lambda msg, done, total: progress.append((done, total)), max_workers=2)
+    with patch.object(client, "get_resource_properties", side_effect=RuntimeError("Access denied")):
+        result = engine.execute(CollectionJob("props", [only_props]))
+    assert result.status == "error" and len(result.errors) == 3
+    assert (3, 3) in progress
+
+
+def test_property_fetch_cancellation_raises():
+    client = LiveClient()
+    selected = group(ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-000", "vm-001"]), ["config|os"])
+    stop = {"now": False}
+    engine = CollectionEngine(client, should_stop=lambda: stop["now"])
+    real = client.get_resource_properties
+
+    def cancelling(rid):
+        stop["now"] = True
+        return real(rid)
+
+    with patch.object(client, "get_resource_properties", side_effect=cancelling):
+        try:
+            engine.execute(CollectionJob("cancel", [selected]))
+        except Exception as exc:
+            assert "cancelled" in str(exc).lower()
+        else:
+            raise AssertionError("cancellation was ignored")
+
+
+def test_wide_export_repeats_latest_properties_on_every_metric_row():
+    client = LiveClient()
+    both = group(ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-000"]), ["config|os"])
+    only_props = CollectionGroup("Props", "VirtualMachine", ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-001"]),
+                                 MetricSet([], property_keys=["config|os"]))
+    result = CollectionEngine(client).execute(CollectionJob("wide", [both, only_props]))
+    metric_row_times = {s.timestamp_ms for s in result.samples if s.field_type == "metric"}
+    assert metric_row_times
+    rows = list(csv.DictReader(io.StringIO(export_csv_wide(result))))
+    os_col = next(k for k in rows[0] if k.startswith("Property (latest, collected at): config|os"))
+    cpu_col = next(k for k in rows[0] if k.startswith("cpu|usage"))
+    combined = [r for r in rows if r["Group"] == "Production"]
+    assert len(combined) == len(metric_row_times)
+    assert all(r[os_col] == "Linux" and r[cpu_col] == "23.5" for r in combined)
+    prop_only = [r for r in rows if r["Group"] == "Props"]
+    assert len(prop_only) == 1 and prop_only[0][os_col] == "Linux" and prop_only[0][cpu_col] == ""

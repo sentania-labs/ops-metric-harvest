@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -470,22 +471,42 @@ class CollectionEngine:
                         total_samples_count += 1
 
         # Properties are current strings, independent of the historical metric range.
-        property_values = {}
+        property_rids = list(dict.fromkeys(
+            obj["resourceId"]
+            for group in job.groups if group.metric_set.property_keys
+            for obj in group_objects[group.group_id]))
+        property_values: Dict[str, Tuple[Dict[str, Any], int]] = {}
+
+        def fetch_properties(rid: str):
+            if self.should_stop():
+                return None
+            try:
+                return rid, self.client.get_resource_properties(rid), None
+            except Exception as exc:
+                return rid, {}, exc
+
+        if property_rids:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                futures = [pool.submit(fetch_properties, rid) for rid in property_rids]
+                for done, future in enumerate(as_completed(futures), 1):
+                    outcome = future.result()
+                    if outcome is None:
+                        continue
+                    rid, values, exc = outcome
+                    if exc is not None:
+                        all_errors.append({"resourceId": rid, "error": f"Properties: {exc}"})
+                    property_values[rid] = (values, int(time.time() * 1000))
+                    self._log(f"Collected latest properties ({done}/{len(property_rids)})", done, len(property_rids))
+            if self.should_stop():
+                self._log("Collection cancelled.")
+                raise EngineError("Collection cancelled by user")
+
         for group in job.groups:
             keys = group.metric_set.property_keys
             if not keys:
                 continue
             for obj in group_objects[group.group_id]:
-                if self.should_stop():
-                    raise EngineError("Collection cancelled by user")
                 rid = obj["resourceId"]
-                if rid not in property_values:
-                    try:
-                        values = self.client.get_resource_properties(rid)
-                        property_values[rid] = (values, int(time.time() * 1000))
-                    except Exception as exc:
-                        all_errors.append({"resourceId": rid, "error": f"Properties: {exc}"})
-                        property_values[rid] = ({}, int(time.time() * 1000))
                 values, collected_ms = property_values[rid]
                 for key in keys:
                     meta = group.metric_set.property_metadata.get(key, {})
@@ -495,16 +516,15 @@ class CollectionEngine:
                         group.group_id, group.name, rid, obj["name"], group.resource_kind,
                         key, meta.get("name", key), collected_ms, iso_utc_from_ms(collected_ms),
                         values.get(key), meta.get("unit", ""), "property", "collection"))
-                self._log(f"Collected latest properties for {obj['name']}")
         missing = sum(sample.value is None for sample in samples)
         if missing:
             all_warnings.append(f"{missing} requested field values are missing")
         total_samples_count = len(samples)
         elapsed = round(time.monotonic() - start_mono, 2)
         status = "success"
-        if all_errors and not samples:
+        if all_errors and all(sample.value is None for sample in samples):
             status = "error"
-        elif all_errors or all_warnings:
+        elif all_errors:
             status = "partial"
         else:
             status = "success"
