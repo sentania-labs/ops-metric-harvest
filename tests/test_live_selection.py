@@ -313,8 +313,7 @@ def test_checking_object_in_imported_selection_runs_the_checked_ids(qtbot):
     # Profile carries an imported selector plus a previously picked ID.
     imported = ObjectSelector("VirtualMachine", "imported", csv_content="Name\nvm-000\n", resource_ids=["vm-001"])
     page.load(group(imported))
-    assert page.value().selection_mode == "explicit"
-    assert "replaces the imported list" in page.summary.text()
+    assert page.value().selection_mode == "imported"
     page.show_matches({"resources": [{"name": "production-002", "resourceId": "vm-002", "adapterKind": "VMWARE",
                                       "resourceKind": "VirtualMachine"}], "page": 0, "total": 1, "has_next": False})
     page.matches.item(0, 0).setCheckState(Qt.Checked)
@@ -322,3 +321,15 @@ def test_checking_object_in_imported_selection_runs_the_checked_ids(qtbot):
     assert selector.selection_mode == "explicit" and selector.csv_content is None
     objects, _, errors = CollectionEngine(LiveClient()).resolve_group_objects(group(selector), {})
     assert "vm-002" in [r["resourceId"] for r in objects] and not errors
+
+
+def test_unedited_imported_selection_round_trips_unchanged(qtbot):
+    from ops_metric_harvest.gui.screens.objects import ObjectsPage
+    page = ObjectsPage()
+    qtbot.addWidget(page)
+    imported = ObjectSelector("VirtualMachine", "imported", csv_content="Name\nvm-000\n", resource_ids=["vm-001"])
+    page.load(group(imported))
+    selector = page.value()
+    assert selector.selection_mode == "imported"
+    assert selector.csv_content == "Name\nvm-000\n"
+    assert selector.resource_ids == ["vm-001"]
