@@ -45,6 +45,14 @@ class CollectionEngine:
     def _log(self, msg: str, done: int = 0, total: int = 0) -> None:
         self.progress_cb(msg, done, total)
 
+    def _search_resources(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+        if self.should_stop():
+            raise EngineError("Collection cancelled by user")
+        result = self.client.search_resources(*args, should_stop=self.should_stop, **kwargs)
+        if self.should_stop():
+            raise EngineError("Collection cancelled by user")
+        return result
+
     def resolve_group_objects(
         self,
         group: CollectionGroup,
@@ -69,17 +77,20 @@ class CollectionEngine:
         if mode == "explicit" and selector.resource_ids and not selector.names:
             try:
                 for offset in range(0, len(selector.resource_ids), 50):
-                    if self.should_stop():
-                        raise EngineError("Collection cancelled by user")
-                    inventory.extend(self.client.search_resources(
-                        kind, adapter_kind=adapter, resource_ids=selector.resource_ids[offset:offset + 50],
-                        should_stop=self.should_stop))
+                    inventory.extend(self._search_resources(
+                        kind, adapter_kind=adapter, resource_ids=selector.resource_ids[offset:offset + 50]))
+            except EngineError:
+                raise
             except Exception as exc:
-                errors.append({"group": group.name, "error": str(exc)})
+                msg = f"Failed to look up fixed objects for {kind}: {exc}"
+                errors.append({"group": group.name, "resource_kind": kind, "error": msg})
+                return [], warnings, errors
         elif mode == "search" and selector.search_query:
             self._log(f"Searching inventory for '{selector.search_query}' in kind '{kind}'...")
             try:
-                inventory = self.client.search_resources(kind, name_query=selector.search_query, adapter_kind=adapter, should_stop=self.should_stop)
+                inventory = self._search_resources(kind, name_query=selector.search_query, adapter_kind=adapter)
+            except EngineError:
+                raise
             except Exception as e:
                 msg = f"Failed to search inventory for {kind}: {e}"
                 errors.append({"group": group.name, "resource_kind": kind, "error": msg})
@@ -92,8 +103,10 @@ class CollectionEngine:
                 targeted: List[Dict[str, Any]] = []
                 for n in selector.names:
                     try:
-                        matches = self.client.search_resources(kind, name_query=n.strip(), adapter_kind=adapter, should_stop=self.should_stop)
+                        matches = self._search_resources(kind, name_query=n.strip(), adapter_kind=adapter)
                         targeted.extend(matches)
+                    except EngineError:
+                        raise
                     except Exception as e:
                         logger.debug("Targeted lookup failed for %s: %s", n, e)
                 # Deduplicate targeted matches by resourceId
@@ -115,8 +128,10 @@ class CollectionEngine:
                 else:
                     self._log(f"Discovering full inventory for resource kind '{kind}'...")
                     try:
-                        all_inventory_cache[cache_key] = self.client.search_resources(kind, adapter_kind=adapter, should_stop=self.should_stop)
+                        all_inventory_cache[cache_key] = self._search_resources(kind, adapter_kind=adapter)
                         inventory = all_inventory_cache[cache_key]
+                    except EngineError:
+                        raise
                     except Exception as e:
                         msg = f"Failed to list inventory for {kind}: {e}"
                         errors.append({"group": group.name, "resource_kind": kind, "error": msg})
@@ -125,7 +140,9 @@ class CollectionEngine:
             if cache_key not in all_inventory_cache:
                 self._log(f"Discovering inventory for resource kind '{kind}'...")
                 try:
-                    all_inventory_cache[cache_key] = self.client.search_resources(kind, adapter_kind=adapter, should_stop=self.should_stop)
+                    all_inventory_cache[cache_key] = self._search_resources(kind, adapter_kind=adapter)
+                except EngineError:
+                    raise
                 except Exception as e:
                     msg = f"Failed to list inventory for {kind}: {e}"
                     errors.append({"group": group.name, "resource_kind": kind, "error": msg})

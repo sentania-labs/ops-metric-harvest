@@ -102,9 +102,9 @@ The CLI separates structured data on stdout from operational progress on stderr,
 
 ### Exit Codes
 
-- `0`: Success (all requested objects and metrics collected).
+- `0`: Success. Missing samples, absent keys and objects without data are reported as warnings and do not change the exit code.
 - `1`: Fatal error (authentication rejected, network failure, or invalid profile).
-- `2`: Partial success (warnings recorded or subset of metrics/objects returned null).
+- `2`: Partial success (some requested work failed, such as a metric batch, a property fetch or an object lookup, while other data was collected). If every sample is null and errors were recorded the run is an error.
 
 ---
 
@@ -123,7 +123,7 @@ Run `ops-metric-harvest gui`, or double-click the standalone executable. The app
 
 ![Native collection settings in the dark Lattice theme](docs/images/native-collection-dark.png)
 
-Properties are always the latest string values, independent of the historical metric range or latest-N setting. The API supplies no property source timestamp, so property rows record collection time with `FieldType=property` and `TimestampBasis=collection`. Missing values remain null and are reported in results. Long CSV/XLSX and JSON distinguish field type and timestamp basis; wide exports label property columns separately even when a metric has the same key.
+Properties are always the latest string values, independent of the historical metric range or latest-N setting. The API supplies no property source timestamp, so property rows record collection time with `FieldType=property` and `TimestampBasis=collection`. Missing values remain null and are reported in results. Long CSV/XLSX and JSON distinguish field type and timestamp basis; wide exports label property columns separately even when a metric has the same key. In wide exports the latest property values repeat on every metric row of the same object; an object with no metric rows gets a single property-only row.
 
 CLI `profiles run` honors saved property selections, output folders and `csv_wide` exports as well as existing metric profiles.
 

@@ -250,3 +250,57 @@ def test_wide_export_repeats_latest_properties_on_every_metric_row():
     assert all(r[os_col] == "Linux" and r[cpu_col] == "23.5" for r in combined)
     prop_only = [r for r in rows if r["Group"] == "Props"]
     assert len(prop_only) == 1 and prop_only[0][os_col] == "Linux" and prop_only[0][cpu_col] == ""
+
+
+def test_cancel_during_fixed_id_lookup_is_not_reported_as_missing_objects():
+    client = LiveClient()
+    ids = [f"vm-{i:03}" for i in range(120)]
+    selected = group(ObjectSelector("VirtualMachine", "explicit", resource_ids=ids))
+    requests = []
+    real = client.resource_page
+
+    def page(*args, **kwargs):
+        requests.append(args)
+        return real(*args, **kwargs)
+
+    engine = CollectionEngine(client, should_stop=lambda: len(requests) >= 1)
+    cache = {}
+    with patch.object(client, "resource_page", side_effect=page):
+        try:
+            engine.resolve_group_objects(selected, cache)
+        except Exception as exc:
+            assert "cancelled" in str(exc).lower()
+        else:
+            raise AssertionError("cancellation returned a partial resolution")
+    assert cache == {}
+
+
+def test_cancel_during_dynamic_inventory_does_not_cache_partial_membership():
+    client = LiveClient()
+    selected = group(ObjectSelector("VirtualMachine", "all"))
+    seen = []
+    real = client.resource_page
+
+    def page(*args, **kwargs):
+        seen.append(args)
+        return real(*args, **kwargs)
+
+    engine = CollectionEngine(client, should_stop=lambda: bool(seen))
+    cache = {}
+    with patch.object(client, "resource_page", side_effect=page):
+        try:
+            engine.resolve_group_objects(selected, cache)
+        except Exception as exc:
+            assert "cancelled" in str(exc).lower()
+        else:
+            raise AssertionError("cancellation returned a partial resolution")
+    assert cache == {}
+
+
+def test_fixed_id_lookup_failure_is_one_error_not_per_id_missing_objects():
+    client = LiveClient()
+    selected = group(ObjectSelector("VirtualMachine", "explicit", resource_ids=["vm-000", "vm-001"]))
+    with patch.object(client, "resource_page", side_effect=RuntimeError("server down")):
+        objects, warnings, errors = CollectionEngine(client).resolve_group_objects(selected, {})
+    assert objects == [] and warnings == []
+    assert len(errors) == 1 and "server down" in errors[0]["error"]
